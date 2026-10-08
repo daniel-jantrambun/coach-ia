@@ -213,3 +213,104 @@ def test_garmin_errors_include_library_warnings():
     error = garmin._error("Connexion Garmin refusée", Exception("JWT_WEB cookie not set"), warnings)
     assert str(error) == ("Connexion Garmin refusée : JWT_WEB cookie not set "
                           "(détails : DI token exchange failed (HTTP 403))")
+
+
+BLOCK = {"focus": {"run": "vitesse", "bike": "endurance", "gym": "force"}, "sessions_per_week": 6}
+
+
+def test_analysis_and_multisport_block(settings, conn):
+    from datetime import date, timedelta
+
+    from coach.db import upsert_activity
+
+    alice_id = auth.authenticate(conn, "alice", PASSWORD)["id"]
+    for k in range(1, 20, 2):
+        day = date.today() - timedelta(days=k)
+        upsert_activity(conn, {"user_id": alice_id, "id": f"fit:{k}", "source": "fit", "sport": "running",
+                               "start_time": f"{day}T07:00:00+00:00", "duration_s": 3000, "distance_m": 9000})
+    upsert_activity(conn, {"user_id": alice_id, "id": "fit:gym", "source": "fit", "sport": "training",
+                           "sub_sport": "strength_training", "start_time": f"{date.today() - timedelta(days=2)}"
+                           "T18:00:00+00:00", "duration_s": 2700})
+    conn.commit()
+    alice, bob = client_for(settings, "alice"), client_for(settings, "bob")
+
+    analysis = alice.get("/api/analysis").json()
+    assert set(analysis["sports"]) == {"run", "gym"}
+    assert bob.get("/api/analysis").json()["sports"] == {}
+
+    created = alice.post("/api/plans/multisport", json=BLOCK)
+    assert created.status_code == 201
+    plan = alice.get(f"/api/plans/{created.json()['id']}").json()
+    assert plan["mode"] == "multisport" and plan["number"] == 1 and len(plan["weeks"]) == 4
+    assert plan["goal"]["focus"] == BLOCK["focus"]
+    # Le bloc suivant est numéroté à la suite ; les plans course restent listés avec leur mode.
+    assert alice.post("/api/plans/multisport", json=BLOCK).json()["number"] == 2
+    alice.post("/api/plans", json=GOAL)
+    assert [p["goal"]["mode"] for p in alice.get("/api/plans").json()] == ["race", "multisport", "multisport"]
+    assert bob.get(f"/api/plans/{created.json()['id']}").status_code == 404
+
+
+def test_multisport_rejects_bad_preferences(settings, conn):
+    alice = client_for(settings, "alice")
+    assert alice.post("/api/plans/multisport", json={"focus": {"gym": "vitesse"}}).status_code == 422
+    assert alice.post("/api/plans/multisport", json={"focus": {}}).status_code == 422
+    response = alice.post("/api/plans/multisport", json={"focus": {"run": "vitesse", "swim": "technique"},
+                                                         "sessions_per_week": 1})
+    assert response.status_code == 422 and "au moins 2 séances" in response.json()["detail"]
+
+
+def test_multisport_week_prompt_keeps_numbers():
+    import json as jsonlib
+
+    from coach.llm import multisport_week_prompt
+
+    week = {"index": 0, "deload": False, "minutes": 100, "sessions": [
+        {"date": "2026-10-13", "sport": "run", "kind": "intervals", "duration_min": 55, "distance_km": 10.2,
+         "pace_s_per_km": 270, "pace_s_per_100m": None, "hr_low": None, "hr_high": None, "reps": 5, "rep_m": 1000,
+         "rep_s": None, "recovery_s": 90, "focus": None},
+        {"date": "2026-10-14", "sport": "gym", "kind": "strength", "duration_min": 45, "distance_km": None,
+         "pace_s_per_km": None, "pace_s_per_100m": None, "hr_low": None, "hr_high": None, "reps": None,
+         "rep_m": None, "rep_s": None, "recovery_s": None, "focus": "lower"},
+    ]}
+    sessions = jsonlib.loads(multisport_week_prompt(week))["seances"]
+    assert sessions[0]["allure"] == "4:30/km" and sessions[0]["repetitions"] == "5x1000m, récup 90s"
+    assert sessions[1] == {"date": "2026-10-14", "sport": "salle", "type": "renforcement", "duree_min": 45,
+                           "zone": "bas du corps"}
+
+
+def test_delete_plan(settings, conn):
+    alice, bob = client_for(settings, "alice"), client_for(settings, "bob")
+    first = alice.post("/api/plans/multisport", json={"focus": {"run": "maintien"}, "sessions_per_week": 3}).json()
+    second = alice.post("/api/plans/multisport", json={"focus": {"run": "maintien"}, "sessions_per_week": 3}).json()
+    conn.execute("INSERT INTO plan_texts (plan_id, week, text, model) VALUES (?, 0, 'texte', 'm')", (first["id"],))
+    conn.commit()
+
+    assert bob.delete(f"/api/plans/{first['id']}").status_code == 404  # le plan d'un autre
+    assert alice.delete(f"/api/plans/{first['id']}").status_code == 204
+    assert alice.get(f"/api/plans/{first['id']}").status_code == 404
+    assert alice.delete(f"/api/plans/{first['id']}").status_code == 404
+    assert conn.execute("SELECT COUNT(*) FROM plan_texts WHERE plan_id = ?", (first["id"],)).fetchone()[0] == 0
+    # La numérotation continue après le dernier bloc restant.
+    assert second["number"] == 2
+    assert alice.post("/api/plans/multisport", json={"focus": {"run": "maintien"}, "sessions_per_week": 3}
+                      ).json()["number"] == 3
+
+
+def test_activity_detail_and_stats_are_per_user(settings, conn):
+    from coach.db import upsert_activity
+
+    alice_id = auth.authenticate(conn, "alice", PASSWORD)["id"]
+    upsert_activity(conn, {"user_id": alice_id, "id": "fit:abc", "source": "fit", "sport": "cycling",
+                           "start_time": "2026-10-01T07:00:00+00:00", "duration_s": 3600, "distance_m": 30000,
+                           "file_path": "/nulle/part.fit"})
+    conn.commit()
+    alice, bob = client_for(settings, "alice"), client_for(settings, "bob")
+
+    detail = alice.get("/api/activities/fit:abc").json()
+    assert detail["category"] == "bike" and detail["streams"] is None and "file_path" not in detail
+    assert bob.get("/api/activities/fit:abc").status_code == 404
+    assert [a["id"] for a in alice.get("/api/activities?category=bike").json()] == ["fit:abc"]
+    assert alice.get("/api/activities?category=run").json() == []
+    assert alice.get("/api/stats?weeks=104").json()["categories"]["bike"]["total"]["km"] == 30.0
+    assert bob.get("/api/stats").json()["categories"] == {}
+    assert alice.get("/api/stats?weeks=1").status_code == 422

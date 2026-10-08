@@ -2,7 +2,10 @@ import { Navigate, NavLink, Route, Routes } from "react-router";
 import { useAuth } from "./auth";
 import { AccountsPage } from "./pages/Accounts";
 import { ActivitiesPage } from "./pages/Activities";
+import { ActivityDetailPage } from "./pages/ActivityDetail";
+import { GraphsPage } from "./pages/Graphs";
 import { LoginPage } from "./pages/Login";
+import { NewBlockPage } from "./pages/NewBlock";
 import { NewPlanPage } from "./pages/NewPlan";
 import { PlanPage } from "./pages/Plan";
 import { ProfilePage } from "./pages/Profile";
@@ -12,6 +15,7 @@ import { Spinner } from "./ui";
 const NAV = [
   { to: "/", label: "Mon plan", icon: "📅", admin: false },
   { to: "/activites", label: "Activités", icon: "📈", admin: false },
+  { to: "/graphes", label: "Graphes", icon: "📊", admin: false },
   { to: "/comptes", label: "Comptes", icon: "👥", admin: true },
   { to: "/profil", label: "Profil", icon: "👤", admin: false },
 ];
@@ -56,9 +60,12 @@ export function App() {
       <main className="mx-auto max-w-3xl space-y-4 px-4 py-4 sm:py-6">
         <Routes>
           <Route path="/" element={<PlanPage />} />
-          <Route path="/plans/nouveau" element={<NewPlanPage />} />
+          <Route path="/plans/nouveau" element={<NewBlockPage />} />
+          <Route path="/plans/course" element={<NewPlanPage />} />
           <Route path="/plans/:planId" element={<PlanPage />} />
           <Route path="/activites" element={<ActivitiesPage />} />
+          <Route path="/activites/:activityId" element={<ActivityDetailPage />} />
+          <Route path="/graphes" element={<GraphsPage />} />
           <Route path="/profil" element={<ProfilePage />} />
           {user.is_admin && <Route path="/comptes" element={<AccountsPage />} />}
           <Route path="*" element={<Navigate to="/" replace />} />
@@ -68,7 +75,7 @@ export function App() {
       {/* Barre d'onglets en bas sur téléphone */}
       <nav
         className={`fixed inset-x-0 bottom-0 z-10 grid border-t border-border bg-surface pb-[env(safe-area-inset-bottom)] sm:hidden ${
-          nav.length === 4 ? "grid-cols-4" : "grid-cols-3"
+          nav.length === 5 ? "grid-cols-5" : "grid-cols-4"
         }`}
       >
         {nav.map((item) => (

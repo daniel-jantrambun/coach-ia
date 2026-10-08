@@ -45,7 +45,7 @@ export function NewPlanPage() {
   }
 
   return (
-    <Card title="Nouvel objectif">
+    <Card title="Préparer une course">
       <form onSubmit={submit} className="space-y-5">
         <fieldset>
           <legend className="mb-2 text-sm font-medium text-ink-2">Distance</legend>
@@ -115,7 +115,7 @@ export function NewPlanPage() {
           <Button type="submit" disabled={busy}>
             {busy ? "Calcul…" : "Générer le plan"}
           </Button>
-          <Link to="/" className={buttonClass("secondary")}>
+          <Link to="/plans/nouveau" className={buttonClass("secondary")}>
             Annuler
           </Link>
         </div>

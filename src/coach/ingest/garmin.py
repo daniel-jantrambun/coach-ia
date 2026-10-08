@@ -10,21 +10,53 @@ import contextlib
 import hashlib
 import logging
 import time
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
 from cryptography.fernet import Fernet
 from garminconnect import Garmin
+from garminconnect.exceptions import GarminConnectTooManyRequestsError
 
 from coach.ingest.fit_files import import_directory
 
 MFA_TTL_S = 10 * 60
+PAGE_SIZE = 100
+FULL_SYNC_DELAY_S = 1.5  # pause entre deux téléchargements lors d'une synchro complète
 # Connexions en attente du code MFA : l'état vit dans l'instance Garmin, donc en mémoire (un seul process).
 _pending_mfa: dict[int, tuple[Garmin, float]] = {}
 
 
 class GarminError(Exception):
     pass
+
+
+@dataclass
+class SyncProgress:
+    """Avancement d'une synchro (lu par l'interface pendant une synchro complète en tâche de fond)."""
+
+    phase: str = "connexion"  # connexion | liste | telechargement | import | termine | erreur
+    found: int = 0            # activités listées chez Garmin
+    to_download: int = 0      # dont pas encore téléchargées
+    downloaded: int = 0
+    imported: int = 0
+    error: str | None = None
+    started_at: str = ""
+    finished_at: str | None = None
+
+    def __post_init__(self):
+        self.started_at = self.started_at or datetime.now(UTC).isoformat()
+
+    @property
+    def running(self) -> bool:
+        return self.phase not in ("termine", "erreur")
+
+    def finish(self, error: str | None = None) -> None:
+        self.phase, self.error = ("erreur", error) if error else ("termine", None)
+        self.finished_at = datetime.now(UTC).isoformat()
+
+    def to_dict(self) -> dict:
+        return {**asdict(self), "running": self.running}
 
 
 # Serveurs contactés pendant la connexion et la synchro (vérifiés par `coach garmin-check`).
@@ -122,41 +154,94 @@ def status(conn, user_id: int) -> dict:
     return {"connected": row is not None, **(dict(row) if row else {})}
 
 
-def sync(conn, user_id: int, fit_dir: Path, secret_key: str | None, limit: int = 50) -> tuple[int, int]:
+def sync(conn, user_id: int, fit_dir: Path, secret_key: str | None, limit: int = 50, full: bool = False,
+         progress: SyncProgress | None = None, delay_s: float | None = None) -> tuple[int, int]:
+    """Télécharge les `limit` dernières activités (ou tout l'historique si `full`) et importe les nouvelles.
+    Renvoie (importées, ignorées). `progress` est mis à jour au fil de l'eau (synchro complète en tâche de fond)."""
+    progress = progress or SyncProgress()
     row = conn.execute("SELECT tokens_encrypted FROM garmin_accounts WHERE user_id = ?", (user_id,)).fetchone()
     if row is None:
         raise GarminError("Compte Garmin non connecté")
     fernet = _fernet(secret_key)
     with _diagnostics() as warnings:
         try:
-            return _sync(conn, user_id, fit_dir, secret_key, limit, fernet, row)
-        except GarminError:
+            result = _sync(conn, user_id, fit_dir, secret_key, limit, fernet, row, full, progress,
+                           (FULL_SYNC_DELAY_S if delay_s is None else delay_s) if full else 0)
+            progress.finish()
+            return result
+        except GarminError as e:
+            progress.finish(str(e))
+            conn.execute("UPDATE garmin_accounts SET last_error = ? WHERE user_id = ?", (str(e), user_id))
+            conn.commit()
             raise
         except Exception as e:
             error = _error("Synchro Garmin échouée", e, warnings)
+            progress.finish(str(error))
             conn.execute("UPDATE garmin_accounts SET last_error = ? WHERE user_id = ?", (str(error), user_id))
             conn.commit()
             raise error from e
 
 
-def _sync(conn, user_id, fit_dir, secret_key, limit, fernet, row) -> tuple[int, int]:
+def _list_all(client, progress: SyncProgress) -> list[dict]:
+    """Tout l'historique Garmin, page par page (la bibliothèque plafonne à 1 000 par appel)."""
+    activities: list[dict] = []
+    while True:
+        page = client.get_activities(len(activities), PAGE_SIZE)
+        if not page:
+            return activities
+        activities += page
+        progress.found = len(activities)
+        if len(page) < PAGE_SIZE:
+            return activities
+
+
+def _download(client, target: Path, activities: list[dict], progress: SyncProgress, delay_s: float) -> None:
+    missing = [a for a in activities if not (target / f"{a['activityId']}.zip").exists()]
+    progress.to_download = len(missing)
+    progress.phase = "telechargement"
+    for i, activity in enumerate(missing):
+        if i and delay_s:
+            time.sleep(delay_s)  # rythme modéré : Garmin bloque les rafales de téléchargements
+        data = client.download_activity(activity["activityId"], dl_fmt=Garmin.ActivityDownloadFormat.ORIGINAL)
+        # Écriture atomique : un téléchargement interrompu ne laisse pas de fichier tronqué (pris pour fait).
+        path = target / f"{activity['activityId']}.zip"
+        tmp = path.with_suffix(".part")
+        tmp.write_bytes(data)
+        tmp.replace(path)
+        progress.downloaded += 1
+
+
+def _sync(conn, user_id, fit_dir, secret_key, limit, fernet, row, full, progress, delay_s) -> tuple[int, int]:
     client = Garmin()
     client.login(tokenstore=fernet.decrypt(row["tokens_encrypted"]).decode())
     target = fit_dir / str(user_id) / "garmin"
     target.mkdir(parents=True, exist_ok=True)
-    for activity in client.get_activities(0, limit):
-        path = target / f"{activity['activityId']}.zip"
-        if not path.exists():
-            path.write_bytes(
-                client.download_activity(activity["activityId"], dl_fmt=Garmin.ActivityDownloadFormat.ORIGINAL)
-            )
+    failure: Exception | None = None
+    try:
+        progress.phase = "liste"
+        activities = _list_all(client, progress) if full else client.get_activities(0, limit)
+        progress.found = len(activities)
+        _download(client, target, activities, progress, delay_s)
+    except Exception as e:  # on importe quand même ce qui a été téléchargé avant l'erreur
+        failure = e
     # Les jetons ont pu être rafraîchis pendant la synchro : on garde la dernière version.
     _save_tokens(conn, user_id, client, secret_key)
+    progress.phase = "import"
+    imported, skipped = import_directory(conn, user_id, target, only_new=True)
+    progress.imported = imported
+    if isinstance(failure, GarminConnectTooManyRequestsError):
+        raise GarminError(
+            f"Garmin limite les requêtes : {progress.downloaded} activité(s) téléchargée(s) sur "
+            f"{progress.to_download}. Relancez dans quelques heures, la synchro reprendra où elle s'est arrêtée."
+        ) from failure
+    if failure is not None:
+        raise failure
     conn.execute(
-        "UPDATE garmin_accounts SET last_sync_at = ? WHERE user_id = ?", (datetime.now(UTC).isoformat(), user_id)
+        "UPDATE garmin_accounts SET last_sync_at = ?, last_error = NULL WHERE user_id = ?",
+        (datetime.now(UTC).isoformat(), user_id),
     )
     conn.commit()
-    return import_directory(conn, user_id, target)
+    return imported, skipped
 
 
 def check_connectivity(timeout_s: float = 10) -> list[tuple[str, str]]:

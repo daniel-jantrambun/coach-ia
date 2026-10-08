@@ -41,8 +41,9 @@ revus avant de démarrer.
 5. **Le LLM ne touche jamais aux chiffres, par construction.** Son texte est stocké à part (`plan_texts`), le
    plan JSON n'est jamais réécrit à partir de sa sortie.
 
-6. **Multisport à venir.** Le planificateur v1 ne couvre que la course à pied. Si l'objectif est un triathlon,
-   le modèle de charge (TRIMP) gère déjà tous les sports ; c'est la génération des séances qui devra évoluer.
+6. **Multisport sans objectif chiffré (oct. 2026).** Plutôt que de fixer une course, l'app analyse ce que la
+   personne fait et lui demande quoi améliorer, sport par sport. Le modèle de charge (TRIMP) couvrait déjà tous
+   les sports ; voir « Planificateur multisport » ci-dessous.
 
 ## Planificateur v1
 
@@ -54,6 +55,23 @@ revus avant de démarrer.
   (30 / 40 / 50 / 70 km pour 5 km / 10 km / semi / marathon), atteint seulement si la règle des +10 % le permet,
   sinon le plan l'indique dans `warnings`.
 - `validate_plan` vérifie les garde-fous avant tout enregistrement.
+
+## Planificateur multisport
+
+- **Classement des séances** (`sports.py`) : champs `sport` / `sub_sport` des FIT → course, vélo, natation, salle
+  (renfo, cardio en salle, HIIT) ou autre (rando, yoga…). « Autre » compte dans la fatigue, sans séances planifiées.
+- **Analyse** sur 8 semaines glissantes : séances et minutes par semaine, tendance (4 dernières semaines contre les
+  4 précédentes). Volume de référence = moyenne des 3 plus grosses des 4 dernières semaines (ignore une décharge).
+- **Références sans objectif** : allures course par régression vitesse ~ % FC de réserve, lue au seuil (85 %) ;
+  sinon sortie médiane = footing, seuil ~18 % plus rapide. Natation : allure médiane /100 m. Vélo : zones de FC
+  (Karvonen). Salle : type de séance (bas / haut du corps, corps entier, gainage) et durée seulement.
+- **Axes** : maintenir, endurance (volume + sortie longue), vitesse (fractionné / seuil), technique (natation),
+  force (salle). Séances réparties depuis les habitudes, 2 minimum pour un sport à améliorer ; une séance ajoutée
+  ajoute du temps (durée minimale), et la sortie longue n'est jamais plus courte qu'une séance habituelle.
+- **Bloc de 4 semaines** : progression selon l'axe (+8 %/sem en endurance, +4 % en vitesse, 0 en maintien), puis
+  décharge à 70 %, sans intensité. Le bloc suivant repart des activités réelles.
+- **Garde-fous** (`validate_block`) : +10 % max par semaine (par sport, donc au total), 2 séances intenses max
+  tous sports confondus, jamais à moins de 48 h, 2 séances max par jour, dernière semaine en décharge.
 
 ## Multi-utilisateurs (famille)
 

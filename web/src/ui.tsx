@@ -1,4 +1,10 @@
-import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode } from "react";
+import {
+  type ButtonHTMLAttributes,
+  type InputHTMLAttributes,
+  type ReactNode,
+  useEffect,
+  useRef,
+} from "react";
 
 export function Card({
   title,
@@ -85,6 +91,51 @@ export function Spinner({ label = "Chargement…" }: { label?: string }) {
       <span className="size-4 animate-spin rounded-full border-2 border-border border-t-accent" />
       {label}
     </p>
+  );
+}
+
+/** Boîte de confirmation modale (<dialog> natif : focus piégé, Échap pour annuler). */
+export function ConfirmDialog({
+  open,
+  title,
+  confirmLabel,
+  onConfirm,
+  onCancel,
+  children,
+}: {
+  open: boolean;
+  title: string;
+  confirmLabel: string;
+  onConfirm: () => void;
+  onCancel: () => void;
+  children: ReactNode;
+}) {
+  const ref = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const dialog = ref.current;
+    if (!dialog) return;
+    if (open && !dialog.open) dialog.showModal();
+    if (!open && dialog.open) dialog.close();
+  }, [open]);
+  return (
+    <dialog
+      ref={ref}
+      onClose={onCancel}
+      aria-labelledby="confirm-title"
+      className="m-auto w-[min(28rem,calc(100%-2rem))] rounded-xl border border-border bg-surface p-5 text-ink backdrop:bg-[rgb(0_0_0/0.5)]"
+    >
+      <h2 id="confirm-title" className="text-base font-semibold">
+        {title}
+      </h2>
+      <div className="mt-2 space-y-2 text-sm text-ink-2">{children}</div>
+      <div className="mt-5 flex flex-wrap justify-end gap-2">
+        {/* Le focus va sur « Annuler » : la touche Entrée ne lance rien par mégarde. */}
+        <Button variant="secondary" onClick={onCancel} autoFocus>
+          Annuler
+        </Button>
+        <Button onClick={onConfirm}>{confirmLabel}</Button>
+      </div>
+    </dialog>
   );
 }
 

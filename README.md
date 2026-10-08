@@ -5,7 +5,8 @@ Planificateur d'entraînement personnel, hébergé sur le Synology DS720+ :
 ```
 Garmin (export FIT / Garmin Connect) ─▶ SQLite ─▶ charge d'entraînement (CTL/ATL/TSB)
                                                      │
-                       objectif (distance, temps, date) ─▶ planificateur déterministe ─▶ garde-fous
+        analyse par sport + ce que vous voulez améliorer ─▶ planificateur déterministe ─▶ garde-fous
+                                    (ou objectif course : distance, temps, date)
                                                                                             │
                                                          LLM 3B local (Ollama) ◀── plan JSON, semaine par semaine
                                                                 │
@@ -27,7 +28,7 @@ résumée et revue dans [docs/architecture.md](docs/architecture.md).
 | 1 | Import des activités (FIT Garmin, sync Garmin Connect) → SQLite | ✅ code prêt, à tester sur les vraies données |
 | 2 | Exploration : charge hebdo, CTL/ATL/TSB | ✅ écran Activités (forme / fatigue) |
 | 3 | Modèle v1 : prédiction de performance (XGBoost) | ⏳ |
-| 4 | Planificateur v1 déterministe + garde-fous | ✅ course à pied |
+| 4 | Planificateur v1 déterministe + garde-fous | ✅ course à pied (objectif daté) et multisport (blocs de 4 semaines) |
 | 5 | Rédaction des séances par le LLM 3B | ✅ code prêt, à tester sur le NAS |
 | 6 | Feedback (RPE) → ajustement du plan | ⏳ |
 | 7 | Détection de fatigue, recalibrage mensuel | ⏳ |
@@ -37,8 +38,19 @@ résumée et revue dans [docs/architecture.md](docs/architecture.md).
 React + Vite + TypeScript + Tailwind dans [web/](web/), servie par FastAPI (un seul conteneur). Pensée pour le
 téléphone, en clair/sombre selon le réglage de l'appareil :
 
-- **Mon plan** : objectif, allures, semaines dépliables (semaine en cours mise en avant), rédaction par le LLM.
-- **Activités** : fraîcheur du jour, courbes forme/fatigue, import de fichiers, synchro Garmin.
+- **Mon plan** : pas d'objectif à fixer. L'app analyse vos 8 dernières semaines par sport (course, vélo, natation,
+  salle, autre) et vous demande ce que vous voulez améliorer dans chacun (maintenir, endurance, vitesse, technique,
+  force). Elle en tire un bloc de 4 semaines (3 de charge + 1 de décharge) ; le bloc suivant est recalculé à partir
+  de ce que vous avez réellement fait. Le plan « course à une date » (distance, chrono) reste disponible.
+  Semaines dépliables (semaine en cours mise en avant), rédaction par le LLM.
+- **Activités** : fraîcheur du jour, courbes forme/fatigue, import de fichiers, synchro Garmin (les 50 dernières
+  activités, ou « Tout synchroniser » : tout l'historique, en tâche de fond avec progression, après confirmation).
+- **Graphes** : par type d'activité (course, vélo, natation, salle, autre) sur 12 semaines, 6 mois ou 1 an :
+  volume, allure ou vitesse et FC moyenne par semaine, puis la liste des activités de ce type. Un clic sur une
+  activité ouvre son récap : allure/vitesse, FC, altitude, puissance et cadence (survol synchronisé), temps par km
+  (ou par 5 km à vélo), longueurs de bassin en natation (allure /100 m, comparable en 25 et 50 m ; tranches de 100 m),
+  temps par zone cardiaque. Un fichier multisport (triathlon) donne une activité par sport, transitions exclues. Les courbes sont relues dans le
+  FIT d'origine conservé sur le NAS (`data/fit`) : une activité dont le fichier a disparu n'affiche que son résumé.
 - **Profil** : FC repos/max, connexion du compte Garmin (MFA compris), mot de passe.
 - **Comptes** (admins) : liste des comptes et de leur état Garmin, création, suppression, nouveau mot de passe.
 
@@ -57,6 +69,11 @@ L'API est sous `/api` (docs : `/api/docs`).
   `/me/garmin/mfa` si le MFA est actif). Le mot de passe Garmin sert une seule fois à obtenir des jetons ; seuls
   ces jetons sont stockés, chiffrés avec `COACH_SECRET_KEY`. Quand ils expirent, la synchro le signale
   (`last_error`) et la personne se reconnecte.
+- **Tout l'historique Garmin** : « Tout synchroniser » (ou `coach sync-garmin --user <nom> --full`) parcourt
+  l'historique page par page, avec une pause de 1,5 s entre deux téléchargements pour ne pas être bloqué par Garmin
+  (API non officielle) : compter 20 à 40 min pour 1 000 activités. Si Garmin limite les requêtes (429), ce qui a été
+  téléchargé est importé et la synchro reprend où elle s'est arrêtée au prochain lancement. Chaque synchro n'importe
+  que les fichiers nouveaux. Pour un premier import massif, l'export complet Garmin (ci-dessous) reste le plus sûr.
 - **Sans Garmin** : import d'un `.fit` ou de l'export complet Garmin (`.zip`) via `POST /activities/import`.
 - Les données de chacun (activités, plans, FC repos/max) sont isolées par utilisateur.
 
@@ -71,7 +88,12 @@ python3.14 -m venv .venv && .venv/bin/pip install -e '.[dev]'
 .venv/bin/coach add-user benjamin --name Benjamin --admin   # ou via l'écran de premier lancement
 # Importer l'export complet Garmin ("Exporter vos données", le .zip tel quel)
 .venv/bin/coach import-fit --user benjamin ~/Downloads/garmin-export
-# Générer un plan : semi en 1h45, 4 sorties/semaine
+# Ce que vous faites, sport par sport, puis un bloc multisport de 4 semaines (sport absent = non planifié)
+.venv/bin/coach analyze --user benjamin
+.venv/bin/coach block --user benjamin --sessions 8 --run vitesse --bike endurance --swim technique --gym force
+# Après mise à jour : relire les FIT déjà stockés (sous-sport, sessions vélo/course des fichiers multisport)
+.venv/bin/coach reimport --user benjamin
+# Ou un plan vers une course : semi en 1h45, 4 sorties/semaine
 .venv/bin/coach plan --user benjamin --distance 21.1 --target 1:45:00 --race-date 2027-02-07 --runs 4
 # Faire rédiger la 1re semaine par le LLM (Ollama local : ollama pull qwen2.5:3b)
 .venv/bin/coach narrate --user benjamin 1 --week 0

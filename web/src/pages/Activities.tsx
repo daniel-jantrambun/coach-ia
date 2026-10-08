@@ -1,17 +1,19 @@
 import { type ChangeEvent, useCallback, useEffect, useState } from "react";
 import { Link } from "react-router";
-import { type Activity, api, type GarminStatus, type LoadPoint } from "../api";
-import { duration, km, pace } from "../format";
+import { type Activity, api, type GarminStatus, type LoadPoint, type SyncProgress } from "../api";
 import { LoadChart } from "../LoadChart";
-import { Alert, Button, buttonClass, Card, errorMessage, Spinner } from "../ui";
+import { Alert, Button, buttonClass, Card, ConfirmDialog, errorMessage, Spinner } from "../ui";
+import { ActivityList } from "./Graphs";
 
-const SPORT_LABELS: Record<string, string> = {
-  running: "Course",
-  cycling: "Vélo",
-  swimming: "Natation",
-  walking: "Marche",
-  hiking: "Randonnée",
-  training: "Renforcement",
+const FULL_SYNC_POLL_MS = 3000;
+
+const PHASE_LABELS: Record<NonNullable<SyncProgress["phase"]>, string> = {
+  connexion: "Connexion à Garmin…",
+  liste: "Recherche de vos activités chez Garmin…",
+  telechargement: "Téléchargement",
+  import: "Import des nouvelles activités…",
+  termine: "Synchronisation complète terminée",
+  erreur: "Synchronisation complète interrompue",
 };
 
 // Fraîcheur (TSB) : la couleur est doublée d'une icône et d'un libellé.
@@ -28,6 +30,8 @@ export function ActivitiesPage() {
   const [garmin, setGarmin] = useState<GarminStatus | null>(null);
   const [message, setMessage] = useState<{ kind: "error" | "success"; text: string } | null>(null);
   const [busy, setBusy] = useState<"import" | "sync" | null>(null);
+  const [confirmFull, setConfirmFull] = useState(false);
+  const [fullSync, setFullSync] = useState<SyncProgress | null>(null);
 
   const reload = useCallback(() => {
     Promise.all([api.activities(), api.load(), api.garminStatus()])
@@ -40,6 +44,38 @@ export function ActivitiesPage() {
   }, []);
 
   useEffect(reload, [reload]);
+
+  // Synchro complète en tâche de fond côté serveur : on suit son avancement (même après avoir quitté la page).
+  useEffect(() => {
+    api
+      .garminSyncAllStatus()
+      .then((p) => setFullSync(p.phase ? p : null))
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (!fullSync?.running) return;
+    const timer = setInterval(() => {
+      api
+        .garminSyncAllStatus()
+        .then((p) => {
+          setFullSync(p);
+          if (!p.running) reload();
+        })
+        .catch(() => {});
+    }, FULL_SYNC_POLL_MS);
+    return () => clearInterval(timer);
+  }, [fullSync?.running, reload]);
+
+  async function startFullSync() {
+    setConfirmFull(false);
+    setMessage(null);
+    try {
+      setFullSync(await api.garminSyncAll());
+    } catch (e) {
+      setMessage({ kind: "error", text: errorMessage(e) });
+    }
+  }
 
   async function importFile(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -114,9 +150,18 @@ export function ActivitiesPage() {
       <Card title="Ajouter des activités">
         <div className="flex flex-wrap gap-2">
           {garmin?.connected ? (
-            <Button onClick={sync} disabled={busy !== null}>
-              {busy === "sync" ? "Synchro…" : "Synchroniser Garmin"}
-            </Button>
+            <>
+              <Button onClick={sync} disabled={busy !== null || fullSync?.running}>
+                {busy === "sync" ? "Synchro…" : "Synchroniser Garmin"}
+              </Button>
+              <Button
+                variant="secondary"
+                onClick={() => setConfirmFull(true)}
+                disabled={busy !== null || fullSync?.running}
+              >
+                Tout synchroniser
+              </Button>
+            </>
           ) : (
             <Link to="/profil" className={buttonClass("primary")}>
               Connecter Garmin
@@ -134,9 +179,34 @@ export function ActivitiesPage() {
           </label>
         </div>
         <p className="mt-2 text-xs text-ink-3">
-          Fichier .fit, ou le .zip de l'export complet Garmin (Compte → Exporter vos données) tel quel.
+          « Synchroniser » récupère les 50 dernières activités Garmin ; « Tout synchroniser », tout
+          l'historique. Fichier .fit, ou le .zip de l'export complet Garmin (Compte → Exporter vos données)
+          tel quel.
         </p>
+        {fullSync && <FullSyncStatus progress={fullSync} />}
       </Card>
+
+      <ConfirmDialog
+        open={confirmFull}
+        title="Synchroniser tout l'historique Garmin ?"
+        confirmLabel="Tout synchroniser"
+        onConfirm={startFullSync}
+        onCancel={() => setConfirmFull(false)}
+      >
+        <p>
+          Toutes vos activités Garmin Connect seront téléchargées puis importées. Celles déjà présentes sont
+          sautées.
+        </p>
+        <p>
+          C'est long : une pause sépare chaque téléchargement pour ne pas être bloqué par Garmin, soit{" "}
+          <strong className="text-ink">20 à 40 min pour 1 000 activités</strong>. La synchro continue sur le
+          serveur si vous quittez cette page.
+        </p>
+        <p>
+          Si Garmin limite les requêtes, la synchro s'arrête en gardant ce qui a été téléchargé : relancez-la
+          plus tard, elle reprendra où elle s'était arrêtée.
+        </p>
+      </ConfirmDialog>
 
       <Card title="Dernières activités">
         {activities === null ? (
@@ -144,34 +214,49 @@ export function ActivitiesPage() {
         ) : activities.length === 0 ? (
           <p className="text-sm text-ink-2">Aucune activité pour l'instant.</p>
         ) : (
-          <ul className="divide-y divide-border">
-            {activities.map((a) => (
-              <li key={a.id} className="flex items-center justify-between gap-3 py-2 text-sm">
-                <div>
-                  <p>{SPORT_LABELS[a.sport] ?? a.sport}</p>
-                  <p className="text-xs text-ink-3 first-letter:uppercase">
-                    {new Date(a.start_time).toLocaleDateString("fr-FR", {
-                      weekday: "short",
-                      day: "numeric",
-                      month: "short",
-                      year: "numeric",
-                    })}
-                  </p>
-                </div>
-                <div className="text-right tabular-nums">
-                  <p>
-                    {a.distance_m ? km(a.distance_m / 1000) : ""} · {duration(a.duration_s)}
-                  </p>
-                  <p className="text-xs text-ink-3">
-                    {a.sport === "running" && a.distance_m ? pace(a.duration_s / (a.distance_m / 1000)) : ""}
-                    {a.avg_hr ? ` · ${Math.round(a.avg_hr)} bpm` : ""}
-                  </p>
-                </div>
-              </li>
-            ))}
-          </ul>
+          <ActivityList activities={activities} />
         )}
       </Card>
     </>
+  );
+}
+
+function FullSyncStatus({ progress }: { progress: SyncProgress }) {
+  const phase = progress.phase ?? "connexion";
+  const total = progress.to_download ?? 0;
+  const done = progress.downloaded ?? 0;
+  return (
+    <div className="mt-4 space-y-2 rounded-lg border border-border px-3 py-2 text-sm" aria-live="polite">
+      <p className="font-medium">
+        {PHASE_LABELS[phase]}
+        {phase === "telechargement" && total > 0 && ` : ${done} / ${total}`}
+      </p>
+      {phase === "liste" && <p className="text-xs text-ink-3">{progress.found ?? 0} activités trouvées</p>}
+      {phase === "telechargement" && total > 0 && (
+        <>
+          <div
+            className="h-2 rounded-full bg-surface-2"
+            role="progressbar"
+            aria-valuemin={0}
+            aria-valuemax={total}
+            aria-valuenow={done}
+            aria-label="Téléchargement des activités"
+          >
+            <div className="h-2 rounded-full bg-accent" style={{ width: `${(done / total) * 100}%` }} />
+          </div>
+          <p className="text-xs text-ink-3">
+            {progress.found} activités chez Garmin, {total} à télécharger. Encore ~
+            {Math.max(1, Math.round(((total - done) * 2) / 60))} min.
+          </p>
+        </>
+      )}
+      {phase === "termine" && (
+        <p className="text-xs text-ink-3">
+          {progress.found} activités chez Garmin, {progress.downloaded} téléchargées, {progress.imported}{" "}
+          importées.
+        </p>
+      )}
+      {phase === "erreur" && progress.error && <Alert>{progress.error}</Alert>}
+    </div>
   );
 }

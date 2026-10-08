@@ -1,4 +1,4 @@
-import type { SessionKind, Week } from "./api";
+import type { Axis, BlockSession, Category, SessionKind, Sport, Week } from "./api";
 
 export const KIND_LABELS: Record<SessionKind, string> = {
   easy: "Footing",
@@ -15,6 +15,86 @@ export const PHASE_LABELS: Record<Week["phase"], string> = {
   taper: "Affûtage",
   race: "Semaine de course",
 };
+
+export const SPORTS: Record<Sport, { label: string; icon: string; axes: Axis[] }> = {
+  run: { label: "Course", icon: "🏃", axes: ["maintien", "endurance", "vitesse"] },
+  bike: { label: "Vélo", icon: "🚴", axes: ["maintien", "endurance", "vitesse"] },
+  swim: { label: "Natation", icon: "🏊", axes: ["maintien", "endurance", "vitesse", "technique"] },
+  gym: { label: "Salle", icon: "🏋️", axes: ["maintien", "force"] },
+};
+export const SPORT_ORDER: Sport[] = ["run", "bike", "swim", "gym"];
+
+export const CATEGORIES: Record<Category, { label: string; icon: string }> = {
+  ...SPORTS,
+  other: { label: "Autre", icon: "🥾" },
+};
+export const CATEGORY_ORDER: Category[] = [...SPORT_ORDER, "other"];
+
+// Libellés des sports FIT bruts (pour « Autre » et la liste des activités).
+export const RAW_SPORT_LABELS: Record<string, string> = {
+  running: "Course",
+  cycling: "Vélo",
+  swimming: "Natation",
+  walking: "Marche",
+  hiking: "Randonnée",
+  training: "Renforcement",
+  fitness_equipment: "Salle",
+  cross_country_skiing: "Ski de fond",
+  alpine_skiing: "Ski",
+  rowing: "Aviron",
+  tennis: "Tennis",
+};
+
+export function activityLabel(a: { sport: string; sub_sport: string | null; category: Category }): string {
+  if (a.sub_sport === "yoga") return "Yoga";
+  if (a.sub_sport === "indoor_cycling") return "Home trainer";
+  if (a.sub_sport === "treadmill") return "Tapis";
+  return a.category === "other" ? (RAW_SPORT_LABELS[a.sport] ?? a.sport) : CATEGORIES[a.category].label;
+}
+
+/** Vitesse (m/s) → allure ou vitesse selon le sport : min/km, km/h, ou /100 m en natation. */
+export function speedLabel(category: Category, metersPerSecond: number): string {
+  if (category === "bike")
+    return `${(metersPerSecond * 3.6).toLocaleString("fr-FR", { maximumFractionDigits: 1 })} km/h`;
+  if (category === "swim") return swimPace(100 / metersPerSecond);
+  return pace(1000 / metersPerSecond);
+}
+
+export const AXIS_LABELS: Record<Axis, string> = {
+  maintien: "Maintenir",
+  endurance: "Endurance",
+  vitesse: "Vitesse",
+  technique: "Technique",
+  force: "Force",
+};
+
+export const BLOCK_KIND_LABELS: Record<BlockSession["kind"], string> = {
+  easy: "Endurance facile",
+  long: "Sortie longue",
+  tempo: "Seuil",
+  intervals: "Fractionné",
+  strides: "Footing + lignes droites",
+  technique: "Technique",
+  strength: "Renforcement",
+};
+
+export const GYM_FOCUS_LABELS: Record<NonNullable<BlockSession["focus"]>, string> = {
+  lower: "bas du corps",
+  upper: "haut du corps",
+  full_body: "corps entier",
+  core: "gainage et mobilité",
+};
+
+export function minutes(value: number): string {
+  const h = Math.floor(value / 60);
+  const m = Math.round(value % 60);
+  return h > 0 ? `${h}h${String(m).padStart(2, "0")}` : `${m} min`;
+}
+
+export function swimPace(secondsPer100m: number): string {
+  const s = Math.round(secondsPer100m);
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}/100 m`;
+}
 
 export function pace(secondsPerKm: number): string {
   const s = Math.round(secondsPerKm);

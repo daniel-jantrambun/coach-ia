@@ -8,6 +8,7 @@ from pathlib import Path
 from coach import auth, service
 from coach.config import load_settings
 from coach.db import connect
+from coach.multisport import AXES, Preferences
 from coach.planner import Goal
 
 
@@ -56,6 +57,10 @@ def main() -> None:
     group.add_argument("--user")
     group.add_argument("--all", action="store_true")
     p.add_argument("--limit", type=int, default=50)
+    p.add_argument("--full", action="store_true", help="tout l'historique (long : pauses entre téléchargements)")
+
+    p = sub.add_parser("reimport", help="Relit les FIT déjà stockés (uploads, Garmin) : remplit les nouveaux champs")
+    p.add_argument("--user", required=True)
 
     sub.add_parser("garmin-check", help="Teste l'accès aux serveurs Garmin depuis cette machine / ce conteneur")
 
@@ -65,6 +70,15 @@ def main() -> None:
     p.add_argument("--target", type=_parse_time, required=True, help="ex. 1:45:00")
     p.add_argument("--race-date", type=date.fromisoformat, required=True)
     p.add_argument("--runs", type=int, default=4)
+
+    p = sub.add_parser("analyze", help="Ce que vous faites, sport par sport (8 dernières semaines)")
+    p.add_argument("--user", required=True)
+
+    p = sub.add_parser("block", help="Génère un bloc multisport de 4 semaines, sans objectif chiffré")
+    p.add_argument("--user", required=True)
+    p.add_argument("--sessions", type=int, default=5, help="séances par semaine, tous sports confondus")
+    for sport, axes in AXES.items():
+        p.add_argument(f"--{sport}", choices=axes, help="axe d'amélioration (sport non planifié si absent)")
 
     p = sub.add_parser("narrate", help="Fait rédiger un plan par le LLM local")
     p.add_argument("--user", required=True)
@@ -109,13 +123,20 @@ def main() -> None:
         failed = False
         for user_id in user_ids:
             try:
-                imported, skipped = garmin.sync(conn, user_id, settings.fit_dir, settings.secret_key, args.limit)
+                imported, skipped = garmin.sync(conn, user_id, settings.fit_dir, settings.secret_key, args.limit,
+                                                full=args.full)
                 print(f"utilisateur {user_id} : {imported} activités importées, {skipped} ignorées")
             except garmin.GarminError as e:
                 # Un compte en erreur (jetons expirés...) ne bloque pas la synchro des autres.
                 print(f"utilisateur {user_id} : {e}", file=sys.stderr)
                 failed = True
         sys.exit(1 if failed else 0)
+    elif args.command == "reimport":
+        from coach.ingest.fit_files import import_directory
+
+        user_id = _user_id(conn, args.user)
+        imported, skipped = import_directory(conn, user_id, settings.fit_dir / str(user_id))
+        print(f"{imported} activités relues, {skipped} fichiers ignorés")
     elif args.command == "garmin-check":
         from coach.ingest import garmin
 
@@ -133,6 +154,24 @@ def main() -> None:
         for warning in plan["warnings"]:
             print("⚠", warning)
         print(f"Plan #{plan_id} enregistré")
+    elif args.command == "analyze":
+        user = auth.user_for_id(conn, _user_id(conn, args.user))
+        print(json.dumps(service.analysis(conn, user, date.today()), ensure_ascii=False, indent=2))
+    elif args.command == "block":
+        user = auth.user_for_id(conn, _user_id(conn, args.user))
+        focus = {sport: getattr(args, sport) for sport in AXES if getattr(args, sport)}
+        try:
+            plan_id, plan = service.create_block(conn, user, Preferences(focus, args.sessions), date.today())
+        except (ValueError, service.InvalidPlan) as e:
+            sys.exit(str(e))
+        for w in plan["weeks"]:
+            sessions = ", ".join(f"{s['date'][5:]} {s['sport']} {s['kind']} {s['duration_min']}'"
+                                 for s in w["sessions"])
+            print(f"S{w['index'] + 1} {w['start']}{' (décharge)' if w['deload'] else '':<11} {w['minutes']:>4} min  "
+                  f"{sessions}")
+        for warning in plan["warnings"]:
+            print("⚠", warning)
+        print(f"Bloc #{plan['number']} enregistré (plan {plan_id})")
     elif args.command == "narrate":
         user_id = _user_id(conn, args.user)
         count = service.narrate_plan(conn, settings, user_id, args.plan_id, args.week)

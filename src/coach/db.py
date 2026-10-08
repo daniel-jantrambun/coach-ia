@@ -1,7 +1,7 @@
 import sqlite3
 from pathlib import Path
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS activities (
     id               TEXT NOT NULL,      -- "<source>:<id source>"
     source           TEXT NOT NULL,      -- fit | garmin
     sport            TEXT NOT NULL,      -- running, cycling, swimming...
+    sub_sport        TEXT,               -- strength_training, indoor_cycling, treadmill...
     start_time       TEXT NOT NULL,      -- ISO 8601 UTC
     duration_s       REAL NOT NULL,
     distance_m       REAL,
@@ -90,10 +91,15 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0")
         conn.execute("UPDATE users SET is_admin = 1 WHERE id = (SELECT MIN(id) FROM users)")
         conn.commit()
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(activities)")}
+    if "sub_sport" not in columns:
+        # v3 : sous-sport, pour classer les séances (salle, home trainer...). Rempli au prochain import.
+        conn.execute("ALTER TABLE activities ADD COLUMN sub_sport TEXT")
+        conn.commit()
 
 
 ACTIVITY_COLUMNS = (
-    "user_id", "id", "source", "sport", "start_time", "duration_s", "distance_m",
+    "user_id", "id", "source", "sport", "sub_sport", "start_time", "duration_s", "distance_m",
     "elevation_gain_m", "avg_hr", "max_hr", "avg_power", "file_path",
 )
 

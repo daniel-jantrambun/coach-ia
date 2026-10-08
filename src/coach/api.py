@@ -3,7 +3,7 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, BackgroundTasks, Cookie, Depends, FastAPI, HTTPException, Response, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Cookie, Depends, FastAPI, HTTPException, Query, Response, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
@@ -12,6 +12,7 @@ from coach.config import Settings, load_settings
 from coach.db import connect
 from coach.ingest import garmin
 from coach.ingest.fit_files import import_directory
+from coach.multisport import Preferences
 from coach.planner import Goal
 
 SESSION_COOKIE = "coach_session"
@@ -60,12 +61,19 @@ class GoalIn(BaseModel):
     runs_per_week: int = Field(default=4, ge=3, le=6)
 
 
+class BlockIn(BaseModel):
+    focus: dict[str, str]  # sport (run | bike | swim | gym) → axe d'amélioration
+    sessions_per_week: int = Field(default=5, ge=1, le=12)
+
+
 def create_app(settings: Settings) -> FastAPI:
     app = FastAPI(title="Coach IA", docs_url="/api/docs", openapi_url="/api/openapi.json")
     api = APIRouter(prefix="/api")
     # Plans en cours de rédaction par le LLM (tâches de fond du process), pour que l'interface puisse l'afficher.
     narrating: set[int] = set()
     narrate_errors: dict[int, str] = {}
+    # Synchros Garmin complètes (tout l'historique), par utilisateur : longues, donc en tâche de fond.
+    full_syncs: dict[int, garmin.SyncProgress] = {}
 
     def db():
         # SQLite : une connexion par requête, simple et suffisant pour une famille.
@@ -222,17 +230,57 @@ def create_app(settings: Settings) -> FastAPI:
 
     @api.post("/me/garmin/sync")
     def garmin_sync(user: User, conn: Conn, limit: int = 50):
+        if (current := full_syncs.get(user["id"])) and current.running:
+            raise HTTPException(409, "Synchronisation complète en cours")
         try:
             imported, skipped = garmin.sync(conn, user["id"], settings.fit_dir, settings.secret_key, limit)
         except garmin.GarminError as e:
             raise HTTPException(502, str(e)) from e
         return {"imported": imported, "skipped": skipped}
 
+    @api.get("/me/garmin/sync-all")
+    def garmin_sync_all_status(user: User):
+        progress = full_syncs.get(user["id"])
+        return progress.to_dict() if progress else {"phase": None, "running": False}
+
+    @api.post("/me/garmin/sync-all", status_code=202)
+    def garmin_sync_all(user: User, conn: Conn, background: BackgroundTasks):
+        """Tout l'historique Garmin, en tâche de fond (20 à 40 min pour 1 000 activités) : suivi par GET."""
+        if not garmin.status(conn, user["id"])["connected"]:
+            raise HTTPException(400, "Compte Garmin non connecté")
+        if (current := full_syncs.get(user["id"])) and current.running:
+            raise HTTPException(409, "Synchronisation complète déjà en cours")
+        progress = full_syncs[user["id"]] = garmin.SyncProgress()
+
+        def run():
+            bg_conn = connect(settings.db_path)
+            try:
+                garmin.sync(bg_conn, user["id"], settings.fit_dir, settings.secret_key, full=True, progress=progress)
+            except Exception as e:  # déjà noté dans `progress` par la synchro, sauf erreur avant son démarrage
+                if progress.running:
+                    progress.finish(str(e))
+            finally:
+                bg_conn.close()
+
+        background.add_task(run)
+        return progress.to_dict()
+
     # --- Activités et charge ---------------------------------------------------------------------------------
 
     @api.get("/activities")
-    def list_activities(user: User, conn: Conn, limit: int = 50):
-        return service.activities(conn, user["id"], limit)
+    def list_activities(user: User, conn: Conn, limit: int = 50, category: str | None = None):
+        return service.activities_with_category(conn, user["id"], category, limit)
+
+    @api.get("/activities/{activity_id}")
+    def get_activity(activity_id: str, user: User, conn: Conn):
+        detail = service.activity_detail(conn, user, activity_id)
+        if detail is None:
+            raise HTTPException(404)
+        return detail
+
+    @api.get("/stats")
+    def stats(user: User, conn: Conn, weeks: int = Query(default=26, ge=4, le=104)):
+        return service.stats(conn, user, date.today(), weeks)
 
     @api.post("/activities/import")
     def import_file(file: UploadFile, user: User, conn: Conn):
@@ -251,6 +299,10 @@ def create_app(settings: Settings) -> FastAPI:
     def load(user: User, conn: Conn, days: int = 120):
         return service.load_series(conn, user, until=date.today())[-days:]
 
+    @api.get("/analysis")
+    def analysis(user: User, conn: Conn):
+        return service.analysis(conn, user, date.today())
+
     # --- Plans -----------------------------------------------------------------------------------------------
 
     @api.get("/plans")
@@ -265,12 +317,28 @@ def create_app(settings: Settings) -> FastAPI:
             raise HTTPException(422, str(e)) from e
         return {"id": plan_id, **plan}
 
+    @api.post("/plans/multisport", status_code=201)
+    def create_block(body: BlockIn, user: User, conn: Conn):
+        try:
+            plan_id, plan = service.create_block(conn, user, Preferences(**body.model_dump()), date.today())
+        except (ValueError, service.InvalidPlan) as e:
+            raise HTTPException(422, str(e)) from e
+        return {"id": plan_id, **plan}
+
     @api.get("/plans/{plan_id}")
     def get_plan(plan_id: int, user: User, conn: Conn):
         plan = service.get_plan(conn, user["id"], plan_id)
         if plan is None:
             raise HTTPException(404)
         return {**plan, "narrating": plan_id in narrating, "narrate_error": narrate_errors.get(plan_id)}
+
+    @api.delete("/plans/{plan_id}", status_code=204)
+    def delete_plan(plan_id: int, user: User, conn: Conn):
+        if plan_id in narrating:
+            raise HTTPException(409, "Rédaction en cours : réessayez une fois terminée")
+        if not service.delete_plan(conn, user["id"], plan_id):
+            raise HTTPException(404)
+        narrate_errors.pop(plan_id, None)
 
     @api.post("/plans/{plan_id}/narrate", status_code=202)
     def narrate(plan_id: int, user: User, conn: Conn, background: BackgroundTasks, weeks: list[int] | None = None):
