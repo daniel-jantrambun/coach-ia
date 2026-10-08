@@ -1,9 +1,9 @@
 name: Test, build Docker image and deploy it on Synology
 
 on:
-  push:
-    branches: [main]
-    tags: ["v*"]
+#   push:
+#     branches: [main]
+#     tags: ["v*"]
   pull_request:
   workflow_dispatch:
 
@@ -14,7 +14,7 @@ permissions:
 env:
   IMAGE: ghcr.io/${{ github.repository_owner }}/coach-ia
   NAS_PLATFORM: linux/amd64
-  NAS_DIR: /volume1/coach-ia
+  NAS_DIR: /volume1/docker/coach-ia
 
 jobs:
   test:
