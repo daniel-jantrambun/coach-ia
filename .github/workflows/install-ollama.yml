@@ -22,12 +22,15 @@ env:
 jobs:
   install:
     runs-on: ubuntu-latest
+    # ~5,7 Go à transférer par WireGuard puis `docker load` sur le J4125 : c'est long, mais pas illimité.
+    timeout-minutes: 90
     concurrency: deploy-nas
     steps:
       - uses: actions/checkout@v4
 
       # La version d'Ollama vient du compose.yaml : une seule source de vérité.
       - name: Download Ollama image and model
+        timeout-minutes: 20
         run: |
           OLLAMA_IMAGE=$(grep -o 'ollama/ollama:[^ "]*' compose.yaml)
           echo "OLLAMA_IMAGE=$OLLAMA_IMAGE" >> "$GITHUB_ENV"
@@ -44,6 +47,7 @@ jobs:
           ls -lh ollama-image.tar.gz ollama-models.tar
 
       - name: Connect WireGuard
+        timeout-minutes: 3
         run: |
           sudo apt-get update && sudo apt-get install -y wireguard-tools resolvconf sshpass
           echo "${{ secrets.WG_CONFIG }}" | sudo tee /etc/wireguard/wg0.conf > /dev/null
@@ -51,6 +55,7 @@ jobs:
           sudo wg-quick up wg0
 
       - name: Install on Synology
+        timeout-minutes: 60
         env:
           SSHPASS: ${{ secrets.CI_GITHUB_PWD }}
           TARGET: ${{ vars.JUPITER_USER }}@${{ vars.JUPITER_IP }}
@@ -79,4 +84,5 @@ jobs:
 
       - name: Disconnect
         if: always()
+        timeout-minutes: 2
         run: sudo wg-quick down wg0

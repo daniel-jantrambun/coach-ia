@@ -21,6 +21,7 @@ env:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -53,6 +54,8 @@ jobs:
     # Les PR sont testées, mais seul main (ou un tag) part sur le NAS, une fois les variables du NAS configurées.
     if: github.event_name != 'pull_request' && vars.JUPITER_IP != ''
     runs-on: ubuntu-latest
+    # Le temps passé en attente (concurrency) ne compte pas : seulement l'exécution du job.
+    timeout-minutes: 40
     concurrency: deploy-nas
     steps:
       - uses: actions/checkout@v4
@@ -76,6 +79,7 @@ jobs:
 
       # Le front est construit dans le Dockerfile (étape node). Une seule architecture : celle du NAS.
       - uses: docker/build-push-action@v6
+        timeout-minutes: 20
         with:
           context: .
           platforms: ${{ env.NAS_PLATFORM }}
@@ -95,6 +99,7 @@ jobs:
           ls -lh coach-image.tar.gz
 
       - name: Connect WireGuard
+        timeout-minutes: 3
         run: |
           sudo apt-get update && sudo apt-get install -y wireguard-tools resolvconf sshpass
           echo "${{ secrets.WG_CONFIG }}" | sudo tee /etc/wireguard/wg0.conf > /dev/null
@@ -105,6 +110,7 @@ jobs:
       # Le .env (COACH_SECRET_KEY) et data/ restent sur le NAS et ne transitent jamais par la CI.
       # Le mot de passe est envoyé sur stdin pour sudo -S : il n'apparaît pas dans la ligne de commande distante.
       - name: Deploy on Synology
+        timeout-minutes: 15
         env:
           SSHPASS: ${{ secrets.CI_GITHUB_PWD }}
           TARGET: ${{ vars.JUPITER_USER }}@${{ vars.JUPITER_IP }}
@@ -140,6 +146,7 @@ jobs:
             /usr/local/bin/docker compose up -d --remove-orphans'"
 
       - name: Check the app answers
+        timeout-minutes: 3
         env:
           SSHPASS: ${{ secrets.CI_GITHUB_PWD }}
           TARGET: ${{ vars.JUPITER_USER }}@${{ vars.JUPITER_IP }}
@@ -154,4 +161,5 @@ jobs:
 
       - name: Disconnect
         if: always()
+        timeout-minutes: 2
         run: sudo wg-quick down wg0
