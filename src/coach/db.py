@@ -1,7 +1,7 @@
 import sqlite3
 from pathlib import Path
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS users (
     display_name  TEXT NOT NULL,
     hr_rest       INTEGER NOT NULL DEFAULT 50,
     hr_max        INTEGER NOT NULL DEFAULT 185,
+    is_admin      INTEGER NOT NULL DEFAULT 0,
     created_at    TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -76,9 +77,19 @@ def connect(db_path: Path) -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA busy_timeout = 5000")
     conn.executescript(SCHEMA)
-    # Les futures évolutions de schéma s'appuieront sur ce numéro de version.
+    _migrate(conn)
     conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     return conn
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Mises à jour des bases créées par une version précédente (idempotent)."""
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(users)")}
+    if "is_admin" not in columns:
+        # v2 : comptes admin. Le plus ancien compte existant devient admin, pour ne pas perdre la main.
+        conn.execute("ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0")
+        conn.execute("UPDATE users SET is_admin = 1 WHERE id = (SELECT MIN(id) FROM users)")
+        conn.commit()
 
 
 ACTIVITY_COLUMNS = (

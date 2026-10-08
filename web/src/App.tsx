@@ -1,20 +1,23 @@
 import { Navigate, NavLink, Route, Routes } from "react-router";
 import { useAuth } from "./auth";
+import { AccountsPage } from "./pages/Accounts";
 import { ActivitiesPage } from "./pages/Activities";
 import { LoginPage } from "./pages/Login";
 import { NewPlanPage } from "./pages/NewPlan";
 import { PlanPage } from "./pages/Plan";
 import { ProfilePage } from "./pages/Profile";
+import { SetupPage } from "./pages/Setup";
 import { Spinner } from "./ui";
 
 const NAV = [
-  { to: "/", label: "Mon plan", icon: "📅" },
-  { to: "/activites", label: "Activités", icon: "📈" },
-  { to: "/profil", label: "Profil", icon: "👤" },
+  { to: "/", label: "Mon plan", icon: "📅", admin: false },
+  { to: "/activites", label: "Activités", icon: "📈", admin: false },
+  { to: "/comptes", label: "Comptes", icon: "👥", admin: true },
+  { to: "/profil", label: "Profil", icon: "👤", admin: false },
 ];
 
 export function App() {
-  const { user, loading } = useAuth();
+  const { user, loading, needsSetup } = useAuth();
 
   if (loading) {
     return (
@@ -23,7 +26,9 @@ export function App() {
       </div>
     );
   }
-  if (!user) return <LoginPage />;
+  if (!user) return needsSetup ? <SetupPage /> : <LoginPage />;
+
+  const nav = NAV.filter((item) => !item.admin || user.is_admin);
 
   return (
     <div className="min-h-dvh pb-20 sm:pb-0">
@@ -31,7 +36,7 @@ export function App() {
         <div className="mx-auto flex h-14 max-w-3xl items-center justify-between px-4">
           <span className="font-semibold">🏃 Coach IA</span>
           <nav className="hidden gap-1 sm:flex">
-            {NAV.map((item) => (
+            {nav.map((item) => (
               <NavLink
                 key={item.to}
                 to={item.to}
@@ -55,13 +60,18 @@ export function App() {
           <Route path="/plans/:planId" element={<PlanPage />} />
           <Route path="/activites" element={<ActivitiesPage />} />
           <Route path="/profil" element={<ProfilePage />} />
+          {user.is_admin && <Route path="/comptes" element={<AccountsPage />} />}
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>
 
       {/* Barre d'onglets en bas sur téléphone */}
-      <nav className="fixed inset-x-0 bottom-0 z-10 grid grid-cols-3 border-t border-border bg-surface pb-[env(safe-area-inset-bottom)] sm:hidden">
-        {NAV.map((item) => (
+      <nav
+        className={`fixed inset-x-0 bottom-0 z-10 grid border-t border-border bg-surface pb-[env(safe-area-inset-bottom)] sm:hidden ${
+          nav.length === 4 ? "grid-cols-4" : "grid-cols-3"
+        }`}
+      >
+        {nav.map((item) => (
           <NavLink
             key={item.to}
             to={item.to}

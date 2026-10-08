@@ -120,3 +120,85 @@ def test_serves_web_app_with_spa_fallback(settings, conn, tmp_path):
     assert client.get("/plans/3").text == "<div id=root></div>"  # route du front
     assert client.get("/api/inconnu").status_code == 404
     assert "nope" not in client.get("/../secret.txt").text
+
+
+def test_first_account_becomes_admin_only_once(settings):
+    client = TestClient(create_app(settings))
+    assert client.get("/api/setup").json() == {"needs_setup": True}
+    response = client.post("/api/setup", json={"username": "papa", "password": PASSWORD, "display_name": "Papa"})
+    assert response.status_code == 201 and response.json()["is_admin"] is True
+    assert client.get("/api/me").status_code == 200  # connecté directement
+    assert client.get("/api/setup").json() == {"needs_setup": False}
+    other = TestClient(create_app(settings))
+    assert other.post("/api/setup", json={"username": "intrus", "password": PASSWORD}).status_code == 409
+
+
+def test_setup_rejects_weak_password_and_bad_username(settings):
+    client = TestClient(create_app(settings))
+    assert client.post("/api/setup", json={"username": "papa", "password": "court"}).status_code == 422
+    assert client.post("/api/setup", json={"username": "a b", "password": PASSWORD}).status_code == 422
+    assert client.get("/api/setup").json() == {"needs_setup": True}
+
+
+def test_admin_manages_accounts(settings, conn):
+    auth.create_user(conn, "root", PASSWORD, is_admin=True)
+    admin, alice = client_for(settings, "root"), client_for(settings, "alice")
+
+    assert alice.get("/api/admin/users").status_code == 403
+    assert alice.post("/api/admin/users", json={"username": "x", "password": PASSWORD}).status_code == 403
+
+    created = admin.post("/api/admin/users", json={"username": "zoe", "password": PASSWORD, "display_name": "Zoé"})
+    assert created.status_code == 201
+    assert admin.post("/api/admin/users", json={"username": "ZOE", "password": PASSWORD}).status_code == 409
+    assert {u["username"] for u in admin.get("/api/admin/users").json()} == {"alice", "bob", "root", "zoe"}
+
+    # Réinitialisation : l'ancienne session d'alice est fermée, le nouveau mot de passe fonctionne.
+    alice_id = auth.authenticate(conn, "alice", PASSWORD)["id"]
+    assert admin.post(f"/api/admin/users/{alice_id}/password", json={"new_password": "nouveau secret"}
+                      ).status_code == 204
+    assert alice.get("/api/me").status_code == 401
+    assert auth.authenticate(conn, "alice", "nouveau secret") is not None
+
+
+def test_delete_account_removes_its_data(settings, conn):
+    auth.create_user(conn, "root", PASSWORD, is_admin=True)
+    admin, bob = client_for(settings, "root"), client_for(settings, "bob")
+    bob.post("/api/plans", json=GOAL)
+    bob_id = bob.get("/api/me").json()["id"]
+    (settings.fit_dir / str(bob_id)).mkdir(parents=True)
+
+    assert admin.delete(f"/api/admin/users/{bob_id}").status_code == 204
+    assert bob.get("/api/me").status_code == 401
+    assert conn.execute("SELECT COUNT(*) FROM plans WHERE user_id = ?", (bob_id,)).fetchone()[0] == 0
+    assert not (settings.fit_dir / str(bob_id)).exists()
+    assert admin.delete(f"/api/admin/users/{bob_id}").status_code == 404
+
+
+def test_admin_cannot_delete_self_or_last_admin(settings, conn):
+    root_id = auth.create_user(conn, "root", PASSWORD, is_admin=True)
+    admin = client_for(settings, "root")
+    assert admin.delete(f"/api/admin/users/{root_id}").status_code == 409
+    other_id = admin.post("/api/admin/users", json={"username": "maman", "password": PASSWORD, "is_admin": True}
+                          ).json()["id"]
+    # Deux admins : l'un peut supprimer l'autre, mais le dernier restant est protégé.
+    assert admin.delete(f"/api/admin/users/{other_id}").status_code == 204
+    with pytest.raises(auth.AccountError):
+        auth.delete_user(conn, root_id, acting_user_id=-1)
+
+
+def test_migration_makes_oldest_account_admin(tmp_path):
+    import sqlite3
+
+    db_path = tmp_path / "old.sqlite"
+    old = sqlite3.connect(db_path)
+    old.executescript(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL UNIQUE COLLATE NOCASE,"
+        " password_hash TEXT NOT NULL, display_name TEXT NOT NULL, hr_rest INTEGER NOT NULL DEFAULT 50,"
+        " hr_max INTEGER NOT NULL DEFAULT 185, created_at TEXT NOT NULL DEFAULT (datetime('now')));"
+        "INSERT INTO users (username, password_hash, display_name) VALUES ('premier', 'x', 'P'), ('second', 'x', 'S');"
+    )
+    old.commit()
+    old.close()
+    conn = connect(db_path)
+    assert [tuple(r) for r in conn.execute("SELECT username, is_admin FROM users ORDER BY id")] == [
+        ("premier", 1), ("second", 0)]

@@ -1,6 +1,28 @@
 // Client de l'API FastAPI (même origine : le cookie de session suit automatiquement).
 
-export type User = { id: number; username: string; display_name: string; hr_rest: number; hr_max: number };
+export type User = {
+  id: number;
+  username: string;
+  display_name: string;
+  hr_rest: number;
+  hr_max: number;
+  is_admin: boolean;
+};
+
+export type NewUser = { username: string; password: string; display_name?: string; is_admin?: boolean };
+
+export type Account = {
+  id: number;
+  username: string;
+  display_name: string;
+  is_admin: boolean;
+  created_at: string;
+  garmin_connected: boolean;
+  last_sync_at: string | null;
+  garmin_error: string | null;
+  activities: number;
+  plans: number;
+};
 
 export type SessionKind = "easy" | "long" | "tempo" | "intervals" | "strides" | "race";
 
@@ -103,6 +125,8 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 }
 
 export const api = {
+  setupStatus: () => request<{ needs_setup: boolean }>("GET", "/setup"),
+  setup: (account: NewUser) => request<User>("POST", "/setup", account),
   login: (username: string, password: string) => request<User>("POST", "/login", { username, password }),
   logout: () => request<void>("POST", "/logout"),
   me: () => request<User>("GET", "/me"),
@@ -117,6 +141,12 @@ export const api = {
   garminMfa: (code: string) => request<{ status: "connected" }>("POST", "/me/garmin/mfa", { code }),
   garminDisconnect: () => request<void>("DELETE", "/me/garmin"),
   garminSync: () => request<{ imported: number; skipped: number }>("POST", "/me/garmin/sync"),
+
+  accounts: () => request<Account[]>("GET", "/admin/users"),
+  createAccount: (account: NewUser) => request<User>("POST", "/admin/users", account),
+  deleteAccount: (id: number) => request<void>("DELETE", `/admin/users/${id}`),
+  resetPassword: (id: number, new_password: string) =>
+    request<void>("POST", `/admin/users/${id}/password`, { new_password }),
 
   activities: (limit = 50) => request<Activity[]>("GET", `/activities?limit=${limit}`),
   importFile: (file: File) => {

@@ -22,6 +22,17 @@ class LoginIn(BaseModel):
     password: str
 
 
+class NewUserIn(BaseModel):
+    username: str
+    password: str
+    display_name: str | None = None
+    is_admin: bool = False
+
+
+class ResetPasswordIn(BaseModel):
+    new_password: str
+
+
 class ProfileIn(BaseModel):
     display_name: str | None = None
     hr_rest: int | None = Field(default=None, ge=30, le=100)
@@ -74,12 +85,44 @@ def create_app(settings: Settings) -> FastAPI:
 
     User = Annotated[dict, Depends(current_user)]
 
+    def admin_user(user: User) -> dict:
+        if not user["is_admin"]:
+            raise HTTPException(403, "Réservé aux administrateurs")
+        return user
+
+    Admin = Annotated[dict, Depends(admin_user)]
+
     def public_user(user: dict) -> dict:
-        return {k: user[k] for k in ("id", "username", "display_name", "hr_rest", "hr_max")}
+        return {**{k: user[k] for k in ("id", "username", "display_name", "hr_rest", "hr_max")},
+                "is_admin": bool(user["is_admin"])}
+
+    def open_session(response: Response, conn, user_id: int) -> None:
+        response.set_cookie(
+            SESSION_COOKIE, auth.create_session(conn, user_id), max_age=auth.SESSION_DAYS * 86400,
+            httponly=True, samesite="lax", secure=settings.cookie_secure,
+        )
 
     @api.get("/health")
     def health():
         return {"status": "ok"}
+
+    # --- Installation : création du premier compte (admin) ----------------------------------------------------
+
+    @api.get("/setup")
+    def setup_status(conn: Conn):
+        return {"needs_setup": auth.needs_setup(conn)}
+
+    @api.post("/setup", status_code=201)
+    def setup(body: NewUserIn, response: Response, conn: Conn):
+        """Possible uniquement tant qu'il n'existe aucun compte ; le compte créé est admin et connecté."""
+        try:
+            user_id = auth.create_first_admin(conn, body.username.strip(), body.password, body.display_name)
+        except auth.AccountError as e:
+            raise HTTPException(409, str(e)) from e
+        except ValueError as e:
+            raise HTTPException(422, str(e)) from e
+        open_session(response, conn, user_id)
+        return public_user(auth.user_for_id(conn, user_id))
 
     # --- Comptes ---------------------------------------------------------------------------------------------
 
@@ -88,10 +131,7 @@ def create_app(settings: Settings) -> FastAPI:
         user = auth.authenticate(conn, body.username, body.password)
         if user is None:
             raise HTTPException(401, "Identifiants invalides")
-        response.set_cookie(
-            SESSION_COOKIE, auth.create_session(conn, user["id"]), max_age=auth.SESSION_DAYS * 86400,
-            httponly=True, samesite="lax", secure=settings.cookie_secure,
-        )
+        open_session(response, conn, user["id"])
         return public_user(user)
 
     @api.post("/logout", status_code=204)
@@ -115,6 +155,42 @@ def create_app(settings: Settings) -> FastAPI:
             raise HTTPException(403, "Mot de passe actuel incorrect")
         try:
             auth.set_password(conn, user["username"], body.new_password)
+        except ValueError as e:
+            raise HTTPException(422, str(e)) from e
+
+    # --- Administration des comptes (admins uniquement) -------------------------------------------------------
+
+    @api.get("/admin/users")
+    def admin_list_users(_: Admin, conn: Conn):
+        return auth.list_users(conn)
+
+    @api.post("/admin/users", status_code=201)
+    def admin_create_user(body: NewUserIn, _: Admin, conn: Conn):
+        try:
+            user_id = auth.create_user(conn, body.username.strip(), body.password, body.display_name, body.is_admin)
+        except auth.AccountError as e:
+            raise HTTPException(409, str(e)) from e
+        except ValueError as e:
+            raise HTTPException(422, str(e)) from e
+        return public_user(auth.user_for_id(conn, user_id))
+
+    @api.delete("/admin/users/{user_id}", status_code=204)
+    def admin_delete_user(user_id: int, admin: Admin, conn: Conn):
+        try:
+            auth.delete_user(conn, user_id, acting_user_id=admin["id"])
+        except KeyError as e:
+            raise HTTPException(404) from e
+        except auth.AccountError as e:
+            raise HTTPException(409, str(e)) from e
+        # Les données en base partent en cascade ; restent les fichiers FIT importés.
+        shutil.rmtree(settings.fit_dir / str(user_id), ignore_errors=True)
+
+    @api.post("/admin/users/{user_id}/password", status_code=204)
+    def admin_reset_password(user_id: int, body: ResetPasswordIn, _: Admin, conn: Conn):
+        try:
+            auth.set_password_for_id(conn, user_id, body.new_password)
+        except KeyError as e:
+            raise HTTPException(404) from e
         except ValueError as e:
             raise HTTPException(422, str(e)) from e
 

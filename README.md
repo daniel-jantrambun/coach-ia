@@ -40,13 +40,19 @@ téléphone, en clair/sombre selon le réglage de l'appareil :
 - **Mon plan** : objectif, allures, semaines dépliables (semaine en cours mise en avant), rédaction par le LLM.
 - **Activités** : fraîcheur du jour, courbes forme/fatigue, import de fichiers, synchro Garmin.
 - **Profil** : FC repos/max, connexion du compte Garmin (MFA compris), mot de passe.
+- **Comptes** (admins) : liste des comptes et de leur état Garmin, création, suppression, nouveau mot de passe.
 
 L'API est sous `/api` (docs : `/api/docs`).
 
 ## Comptes et Garmin
 
-- **Pas d'inscription libre** : les comptes sont créés par l'admin (`coach add-user`). Mots de passe hachés
-  (scrypt), sessions par cookie HttpOnly (30 jours), blocage 15 min après 5 échecs.
+- **Premier lancement** : tant qu'aucun compte n'existe, l'app propose de créer le compte administrateur (une seule
+  fois, création atomique). Ouvrez l'app juste après le premier déploiement pour le créer.
+- **Pas d'inscription libre** : un admin crée, supprime les comptes et réinitialise les mots de passe (page
+  **Comptes**). Il reste toujours au moins un admin, et un admin ne peut pas supprimer son propre compte.
+  Supprimer un compte efface aussi ses activités, plans, fichiers FIT et jetons Garmin.
+- Mots de passe hachés (scrypt), sessions par cookie HttpOnly (30 jours), blocage 15 min après 5 échecs.
+  En secours, la CLI reste disponible : `coach add-user <nom> [--admin]`, `coach set-password <nom>`.
 - **Garmin sans stocker le mot de passe** : chacun connecte son compte depuis l'app (`POST /me/garmin`, puis
   `/me/garmin/mfa` si le MFA est actif). Le mot de passe Garmin sert une seule fois à obtenir des jetons ; seuls
   ces jetons sont stockés, chiffrés avec `COACH_SECRET_KEY`. Quand ils expirent, la synchro le signale
@@ -62,7 +68,7 @@ python3.14 -m venv .venv && .venv/bin/pip install -e '.[dev]'
 ```
 
 ```bash
-.venv/bin/coach add-user benjamin --name Benjamin
+.venv/bin/coach add-user benjamin --name Benjamin --admin   # ou via l'écran de premier lancement
 # Importer l'export complet Garmin ("Exporter vos données", le .zip tel quel)
 .venv/bin/coach import-fit --user benjamin ~/Downloads/garmin-export
 # Générer un plan : semi en 1h45, 4 sorties/semaine
@@ -109,11 +115,7 @@ Secrets et variables du dépôt (Settings → Secrets and variables → Actions)
    [.env.example](.env.example)), lisible par root uniquement (`chmod 600`).
 2. Lancer le workflow **Install Ollama on Synology**.
 3. Relancer le workflow de déploiement (ou pousser sur `main`).
-4. Créer les comptes :
-
-   ```bash
-   cd /volume1/docker/coach-ia && sudo docker compose exec app coach add-user benjamin --name Benjamin
-   ```
+4. Ouvrir l'app et créer le compte administrateur, puis les comptes de la famille (page **Comptes**).
 
 L'app est alors sur `http://<ip-du-nas>:8000`, depuis le réseau local ou le WireGuard.
 

@@ -37,9 +37,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(prog="coach")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p = sub.add_parser("add-user", help="Crée un compte (pas d'inscription libre dans l'app)")
+    p = sub.add_parser("add-user", help="Crée un compte (aussi possible depuis l'app, page Comptes)")
     p.add_argument("username")
     p.add_argument("--name", help="nom affiché")
+    p.add_argument("--admin", action="store_true", help="donne les droits d'administration")
 
     p = sub.add_parser("set-password", help="Réinitialise le mot de passe d'un compte")
     p.add_argument("username")
@@ -74,8 +75,8 @@ def main() -> None:
 
     if args.command == "add-user":
         try:
-            auth.create_user(conn, args.username, _ask_password(), args.name)
-        except ValueError as e:
+            auth.create_user(conn, args.username, _ask_password(), args.name, is_admin=args.admin)
+        except (ValueError, auth.AccountError) as e:
             sys.exit(str(e))
         print(f"Compte {args.username} créé")
     elif args.command == "set-password":
