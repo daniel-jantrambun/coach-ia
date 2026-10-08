@@ -5,7 +5,8 @@ revus avant de démarrer.
 
 ## Décisions reprises telles quelles
 
-- **Hébergement** : Synology DS720+ seul (Celeron J4125 4 cœurs, 6 Go RAM, 2 slots NVMe), accès par Tailscale.
+- **Hébergement** : Synology DS720+ seul (Celeron J4125 4 cœurs, 6 Go RAM, 2 slots NVMe), accès par le
+  réseau local ou le WireGuard existant (choix d'oct. 2026, plutôt que Tailscale ou Cloudflare Access).
   Cloudflare écarté : données de santé + GPS restent à la maison, et le Python tourne sans contrainte.
 - **Pas de chat** : un outil de planification. Le plan est calculé par du code déterministe ; le LLM ne fait
   que rédiger les séances et justifier les ajustements, appelé à chaque recalcul de plan.
@@ -53,3 +54,15 @@ revus avant de démarrer.
   (30 / 40 / 50 / 70 km pour 5 km / 10 km / semi / marathon), atteint seulement si la règle des +10 % le permet,
   sinon le plan l'indique dans `warnings`.
 - `validate_plan` vérifie les garde-fous avant tout enregistrement.
+
+## Multi-utilisateurs (famille)
+
+- Comptes créés par l'admin, mot de passe scrypt, sessions côté serveur (seul le hash du jeton est en base).
+- L'app reste privée (réseau local / WireGuard) : elle détient des jetons Garmin et des données de santé.
+- Garmin n'a pas d'API officielle ouverte aux particuliers (Connect Developer Program réservé aux entreprises).
+  On utilise `garminconnect` ≥ 0.3.5 (nouvelle connexion « app mobile » ; l'ancienne via `garth` est cassée
+  depuis 2026, et < 0.3.5 a la CVE-2026-54447). Le mot de passe est échangé contre des jetons, chiffrés en base
+  (Fernet, clé dérivée de `COACH_SECRET_KEY`) ; il n'est jamais stocké.
+- Strava écarté : ses conditions d'API interdisent depuis fin 2024 l'usage des données dans des modèles d'IA.
+- SQLite suffit : quelques utilisateurs, très peu d'écritures concurrentes (WAL + busy_timeout). PostgreSQL ne
+  deviendrait utile que pour une app publique.

@@ -1,10 +1,39 @@
 import sqlite3
 from pathlib import Path
 
+SCHEMA_VERSION = 1
+
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS users (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    username      TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    password_hash TEXT NOT NULL,
+    display_name  TEXT NOT NULL,
+    hr_rest       INTEGER NOT NULL DEFAULT 50,
+    hr_max        INTEGER NOT NULL DEFAULT 185,
+    created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- On ne stocke que le hash du jeton de session : une fuite de la base ne permet pas d'usurper une session.
+CREATE TABLE IF NOT EXISTS sessions (
+    token_hash TEXT PRIMARY KEY,
+    user_id    INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    expires_at TEXT NOT NULL
+);
+
+-- Jetons Garmin Connect chiffrés (Fernet). Le mot de passe Garmin n'est jamais stocké.
+CREATE TABLE IF NOT EXISTS garmin_accounts (
+    user_id          INTEGER PRIMARY KEY REFERENCES users (id) ON DELETE CASCADE,
+    tokens_encrypted BLOB NOT NULL,
+    connected_at     TEXT NOT NULL DEFAULT (datetime('now')),
+    last_sync_at     TEXT,
+    last_error       TEXT
+);
+
 CREATE TABLE IF NOT EXISTS activities (
-    id               TEXT PRIMARY KEY,   -- "<source>:<id source>"
-    source           TEXT NOT NULL,      -- fit | garmin | strava
+    user_id          INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    id               TEXT NOT NULL,      -- "<source>:<id source>"
+    source           TEXT NOT NULL,      -- fit | garmin
     sport            TEXT NOT NULL,      -- running, cycling, swimming...
     start_time       TEXT NOT NULL,      -- ISO 8601 UTC
     duration_s       REAL NOT NULL,
@@ -13,16 +42,19 @@ CREATE TABLE IF NOT EXISTS activities (
     avg_hr           REAL,
     max_hr           REAL,
     avg_power        REAL,
-    file_path        TEXT
+    file_path        TEXT,
+    PRIMARY KEY (user_id, id)
 );
-CREATE INDEX IF NOT EXISTS activities_start_time ON activities (start_time);
+CREATE INDEX IF NOT EXISTS activities_user_start ON activities (user_id, start_time);
 
 CREATE TABLE IF NOT EXISTS plans (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id    INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     goal_json  TEXT NOT NULL,
     plan_json  TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS plans_user ON plans (user_id);
 
 -- Texte rédigé par le LLM, séparé des chiffres : il ne peut jamais modifier le plan.
 CREATE TABLE IF NOT EXISTS plan_texts (
@@ -38,16 +70,19 @@ CREATE TABLE IF NOT EXISTS plan_texts (
 
 def connect(db_path: Path) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA busy_timeout = 5000")
     conn.executescript(SCHEMA)
+    # Les futures évolutions de schéma s'appuieront sur ce numéro de version.
+    conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     return conn
 
 
 ACTIVITY_COLUMNS = (
-    "id", "source", "sport", "start_time", "duration_s", "distance_m",
+    "user_id", "id", "source", "sport", "start_time", "duration_s", "distance_m",
     "elevation_gain_m", "avg_hr", "max_hr", "avg_power", "file_path",
 )
 
@@ -55,8 +90,8 @@ ACTIVITY_COLUMNS = (
 def upsert_activity(conn: sqlite3.Connection, activity: dict) -> None:
     cols = ", ".join(ACTIVITY_COLUMNS)
     params = ", ".join(f":{c}" for c in ACTIVITY_COLUMNS)
-    updates = ", ".join(f"{c} = excluded.{c}" for c in ACTIVITY_COLUMNS if c != "id")
+    updates = ", ".join(f"{c} = excluded.{c}" for c in ACTIVITY_COLUMNS if c not in ("user_id", "id"))
     row = {c: activity.get(c) for c in ACTIVITY_COLUMNS}
     conn.execute(
-        f"INSERT INTO activities ({cols}) VALUES ({params}) ON CONFLICT (id) DO UPDATE SET {updates}", row
+        f"INSERT INTO activities ({cols}) VALUES ({params}) ON CONFLICT (user_id, id) DO UPDATE SET {updates}", row
     )

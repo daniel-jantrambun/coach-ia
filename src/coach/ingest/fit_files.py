@@ -47,6 +47,17 @@ def _session_to_activity(frame) -> dict | None:
     }
 
 
+def _iter_zip(archive: zipfile.ZipFile, location: str) -> Iterator[tuple[str, bytes]]:
+    # L'export complet Garmin contient des zip dans le zip (DI-Connect-Uploaded-Files/UploadedFiles_*.zip).
+    for name in archive.namelist():
+        lower = name.lower()
+        if lower.endswith(".fit"):
+            yield f"{location}!{name}", archive.read(name)
+        elif lower.endswith(".zip"):
+            with zipfile.ZipFile(io.BytesIO(archive.read(name))) as inner:
+                yield from _iter_zip(inner, f"{location}!{name}")
+
+
 def iter_fit_payloads(root: Path) -> Iterator[tuple[str, bytes]]:
     """Parcourt un dossier et renvoie (chemin, contenu) pour chaque .fit, y compris dans les .zip."""
     for path in sorted(root.rglob("*")):
@@ -55,13 +66,11 @@ def iter_fit_payloads(root: Path) -> Iterator[tuple[str, bytes]]:
             yield str(path), path.read_bytes()
         elif suffix == ".zip":
             with zipfile.ZipFile(path) as archive:
-                for name in archive.namelist():
-                    if name.lower().endswith(".fit"):
-                        yield f"{path}!{name}", archive.read(name)
+                yield from _iter_zip(archive, str(path))
 
 
-def import_directory(conn, root: Path) -> tuple[int, int]:
-    """Importe tous les FIT d'un dossier. Renvoie (importés, ignorés)."""
+def import_directory(conn, user_id: int, root: Path) -> tuple[int, int]:
+    """Importe tous les FIT d'un dossier pour un utilisateur. Renvoie (importés, ignorés)."""
     from coach.db import upsert_activity
 
     imported = skipped = 0
@@ -75,6 +84,7 @@ def import_directory(conn, root: Path) -> tuple[int, int]:
             continue
         # Identifiant stable basé sur le contenu : réimporter le même fichier ne crée pas de doublon.
         activity["id"] = "fit:" + hashlib.sha1(payload).hexdigest()[:16]
+        activity["user_id"] = user_id
         activity["source"] = "fit"
         activity["file_path"] = location
         upsert_activity(conn, activity)
