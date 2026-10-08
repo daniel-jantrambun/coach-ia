@@ -1,4 +1,4 @@
-# Coach IA
+# Savapav
 
 Planificateur d'entraînement personnel, hébergé sur le Synology DS720+ :
 
@@ -116,7 +116,7 @@ via WireGuard, comme pour `cv-bd`.
 ### Workflows GitHub Actions
 
 - **Test, build Docker image and deploy it on Synology** (à chaque push) : tests Python + lint/build du front, puis
-  sur `main` : image `ghcr.io/daniel-jantrambun/coach-ia`, transfert au NAS, `docker load`, copie du
+  sur `main` : image `ghcr.io/daniel-jantrambun/savapav`, transfert au NAS, `docker load`, copie du
   `compose.yaml` (image épinglée sur le commit), `docker compose up -d`, vérification de `/api/health`.
   Le déploiement est ignoré tant que la variable `JUPITER_IP` n'est pas configurée.
 - **Install Ollama on Synology** (manuel) : télécharge l'image Ollama et le modèle sur le runner, les installe sur
@@ -133,7 +133,7 @@ Secrets et variables du dépôt (Settings → Secrets and variables → Actions)
 
 ### Première installation
 
-1. Sur le NAS : créer `/volume1/docker/coach-ia/` et y placer le `.env` (`COACH_SECRET_KEY`, voir
+1. Sur le NAS : créer `/volume1/docker/savapav/` et y placer le `.env` (`COACH_SECRET_KEY`, voir
    [.env.example](.env.example)), lisible par root uniquement (`chmod 600`).
 2. Lancer le workflow **Install Ollama on Synology**.
 3. Relancer le workflow de déploiement (ou pousser sur `main`).
@@ -145,7 +145,7 @@ Synchro Garmin nocturne de tous les comptes connectés : tâche planifiée DSM (
 Planificateur de tâches, en root) :
 
 ```bash
-cd /volume1/docker/coach-ia && /usr/local/bin/docker compose exec -T app coach sync-garmin --all
+cd /volume1/docker/savapav && /usr/local/bin/docker compose exec -T app coach sync-garmin --all
 ```
 
 Sauvegarder `data/coach.sqlite` (Hyper Backup) et `COACH_SECRET_KEY` séparément.

@@ -67,7 +67,7 @@ class BlockIn(BaseModel):
 
 
 def create_app(settings: Settings) -> FastAPI:
-    app = FastAPI(title="Coach IA", docs_url="/api/docs", openapi_url="/api/openapi.json")
+    app = FastAPI(title="Savapav", docs_url="/api/docs", openapi_url="/api/openapi.json")
     api = APIRouter(prefix="/api")
     # Plans en cours de rédaction par le LLM (tâches de fond du process), pour que l'interface puisse l'afficher.
     narrating: set[int] = set()

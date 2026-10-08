@@ -15,9 +15,9 @@ permissions:
 
 env:
   NAS_PLATFORM: linux/amd64
-  NAS_DIR: /volume1/docker/coach-ia
+  NAS_DIR: /volume1/docker/savapav
   # Transit des fichiers envoyés au NAS (le préfixe @ le masque dans File Station).
-  STAGE: /volume1/@coach-ia-incoming
+  STAGE: /volume1/@savapav-incoming
 
 jobs:
   install:

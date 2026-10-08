@@ -1,8 +1,9 @@
-# Déploiement sur le DS720+ (Container Manager) : /volume1/docker/coach-ia/compose.yaml
+# Déploiement sur le DS720+ (Container Manager) : /volume1/docker/savapav/compose.yaml
 # Copié par la CI à chaque déploiement, avec l'image de l'app épinglée sur le commit.
 services:
   app:
-    image: ghcr.io/daniel-jantrambun/coach-ia:latest
+    container_name: savapav-web
+    image: ghcr.io/daniel-jantrambun/savapav:latest
     # Le NAS n'accède pas aux registres : l'image est chargée par la CI (docker load).
     pull_policy: never
     restart: unless-stopped
@@ -19,6 +20,7 @@ services:
   # LLM 3B local. Le modèle est déchargé de la RAM après 5 min d'inactivité.
   # Image et modèle installés par le workflow manuel « Install Ollama on Synology ».
   llm:
+    container_name: savapav-llm
     image: ollama/ollama:0.40.1
     pull_policy: never
     restart: unless-stopped

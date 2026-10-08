@@ -1,5 +1,5 @@
 [project]
-name = "coach-ia"
+name = "savapav"
 version = "0.1.0"
 description = "Planificateur d'entraînement personnel : données Garmin/Strava → charge d'entraînement → plan déterministe, rédigé par un LLM 3B local."
 requires-python = ">=3.12"

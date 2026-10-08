@@ -28,7 +28,7 @@ export function LoginPage() {
         className="w-full max-w-sm space-y-4 rounded-xl border border-border bg-surface p-6"
       >
         <div>
-          <h1 className="text-xl font-semibold">🏃 Coach IA</h1>
+          <h1 className="text-xl font-semibold">🏃 Savapav</h1>
           <p className="mt-1 text-sm text-ink-2">Connectez-vous avec le compte créé pour vous.</p>
         </div>
         <Field

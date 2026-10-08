@@ -35,7 +35,7 @@ export function SetupPage() {
         className="w-full max-w-sm space-y-4 rounded-xl border border-border bg-surface p-6"
       >
         <div>
-          <h1 className="text-xl font-semibold">🏃 Bienvenue sur Coach IA</h1>
+          <h1 className="text-xl font-semibold">🏃 Bienvenue sur Savapav</h1>
           <p className="mt-1 text-sm text-ink-2">
             Créez le compte administrateur. Il pourra ensuite créer les comptes des autres membres de la
             famille.

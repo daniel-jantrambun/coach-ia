@@ -17,11 +17,11 @@ permissions:
   packages: write
 
 env:
-  IMAGE: ghcr.io/${{ github.repository_owner }}/coach-ia
+  IMAGE: ghcr.io/${{ github.repository_owner }}/savapav
   NAS_PLATFORM: linux/amd64
-  NAS_DIR: /volume1/docker/coach-ia
+  NAS_DIR: /volume1/docker/savapav
   # Transit des fichiers envoyés au NAS (le préfixe @ le masque dans File Station).
-  STAGE: /volume1/@coach-ia-incoming
+  STAGE: /volume1/@savapav-incoming
 
 jobs:
   test:
@@ -142,7 +142,7 @@ jobs:
             /usr/local/bin/docker load -i $REMOTE_TAR
             rm -f $REMOTE_TAR
             # Seule l image de l app est épinglée sur ce commit ; celle d Ollama reste inchangée.
-            sed \"s#^\\( *image: ghcr.io/[^/]*/coach-ia\\):.*#\\1:$TAG#\" $REMOTE_COMPOSE > $NAS_DIR/compose.yaml
+            sed \"s#^\\( *image: ghcr.io/[^/]*/savapav\\):.*#\\1:$TAG#\" $REMOTE_COMPOSE > $NAS_DIR/compose.yaml
             rm -f $REMOTE_COMPOSE
             grep image: $NAS_DIR/compose.yaml
             cd $NAS_DIR

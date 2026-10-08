@@ -38,7 +38,7 @@ export function App() {
     <div className="min-h-dvh pb-20 sm:pb-0">
       <header className="sticky top-0 z-10 border-b border-border bg-surface/90 backdrop-blur">
         <div className="mx-auto flex h-14 max-w-3xl items-center justify-between px-4">
-          <span className="font-semibold">🏃 Coach IA</span>
+          <span className="font-semibold">🏃 Savapav</span>
           <nav className="hidden gap-1 sm:flex">
             {nav.map((item) => (
               <NavLink
