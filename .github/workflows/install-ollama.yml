@@ -23,7 +23,7 @@ jobs:
   install:
     runs-on: ubuntu-latest
     # ~5,7 Go à transférer par WireGuard puis `docker load` sur le J4125 : c'est long, mais pas illimité.
-    timeout-minutes: 90
+    timeout-minutes: 20
     concurrency: deploy-nas
     steps:
       - uses: actions/checkout@v4
