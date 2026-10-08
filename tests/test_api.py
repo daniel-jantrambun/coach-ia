@@ -202,3 +202,14 @@ def test_migration_makes_oldest_account_admin(tmp_path):
     conn = connect(db_path)
     assert [tuple(r) for r in conn.execute("SELECT username, is_admin FROM users ORDER BY id")] == [
         ("premier", 1), ("second", 0)]
+
+
+def test_garmin_errors_include_library_warnings():
+    import logging
+
+    with garmin._diagnostics() as warnings:
+        logging.getLogger("garminconnect.client").warning("DI token exchange failed (%s)", "HTTP 403")
+        logging.getLogger("garminconnect.client").warning("DI token exchange failed (%s)", "HTTP 403")
+    error = garmin._error("Connexion Garmin refusée", Exception("JWT_WEB cookie not set"), warnings)
+    assert str(error) == ("Connexion Garmin refusée : JWT_WEB cookie not set "
+                          "(détails : DI token exchange failed (HTTP 403))")

@@ -57,6 +57,8 @@ def main() -> None:
     group.add_argument("--all", action="store_true")
     p.add_argument("--limit", type=int, default=50)
 
+    sub.add_parser("garmin-check", help="Teste l'accès aux serveurs Garmin depuis cette machine / ce conteneur")
+
     p = sub.add_parser("plan", help="Génère un plan vers un objectif")
     p.add_argument("--user", required=True)
     p.add_argument("--distance", type=float, required=True, help="km, ex. 21.1")
@@ -114,6 +116,13 @@ def main() -> None:
                 print(f"utilisateur {user_id} : {e}", file=sys.stderr)
                 failed = True
         sys.exit(1 if failed else 0)
+    elif args.command == "garmin-check":
+        from coach.ingest import garmin
+
+        results = garmin.check_connectivity()
+        for host, result in results:
+            print(f"{host:<24} {result}")
+        sys.exit(1 if any(r.startswith("ÉCHEC") for _, r in results) else 0)
     elif args.command == "plan":
         goal = Goal(args.distance, args.target, args.race_date, args.runs)
         plan_id, plan = service.create_plan(conn, _user_id(conn, args.user), goal, date.today())
