@@ -28,3 +28,6 @@ services:
     volumes:
       - ./ollama:/root/.ollama
     mem_limit: 3g
+    # Priorité CPU basse (1024 par défaut) : pendant une rédaction, DSM et les autres conteneurs passent avant.
+    # (pas de `cpus:` : les noyaux Synology ne gèrent souvent pas les quotas CFS)
+    cpu_shares: 256
