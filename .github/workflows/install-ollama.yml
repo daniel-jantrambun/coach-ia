@@ -37,8 +37,9 @@ jobs:
           sleep 5
           docker exec ollama ollama pull "${{ inputs.model }}"
           docker rm -f ollama
-          sudo tar -C ollama-data -czf ollama-models.tar.gz models
-          ls -lh ollama-image.tar.gz ollama-models.tar.gz
+          # Les poids GGUF sont déjà compressés : un tar simple suffit.
+          sudo tar -C ollama-data -cf ollama-models.tar models
+          ls -lh ollama-image.tar.gz ollama-models.tar
 
       - name: Connect WireGuard
         run: |
@@ -51,19 +52,23 @@ jobs:
         env:
           SSHPASS: ${{ secrets.CI_GITHUB_PWD }}
           TARGET: ${{ vars.JUPITER_USER }}@${{ vars.JUPITER_IP }}
+          NAS_USER: ${{ vars.JUPITER_USER }}
         run: |
           nas() { sshpass -e ssh -p 22822 -o StrictHostKeyChecking=no "$TARGET" "$@"; }
           [ "$(nas uname -m)" = x86_64 ] || { echo "Le NAS n'est plus en x86_64 : adapter NAS_PLATFORM" >&2; exit 1; }
 
-          nas "cat > /tmp/ollama-image.tar.gz" < ollama-image.tar.gz
-          nas "cat > /tmp/ollama-models.tar.gz" < ollama-models.tar.gz
+          # /tmp est sur la partition système de DSM (~2 Go) : on transite par un dossier du volume.
+          STAGE=$NAS_DIR/.incoming
+          echo "$SSHPASS" | nas "sudo -S -p '' sh -euc 'mkdir -p $STAGE && chown $NAS_USER $STAGE && chmod 700 $STAGE'"
+          nas "cat > $STAGE/ollama-image.tar.gz" < ollama-image.tar.gz
+          nas "cat > $STAGE/ollama-models.tar" < ollama-models.tar
 
           # Les modèles déjà présents sont conservés ; le nouveau s'ajoute à côté.
           echo "$SSHPASS" | nas "sudo -S -p '' sh -euc '
-            /usr/local/bin/docker load -i /tmp/ollama-image.tar.gz
+            /usr/local/bin/docker load -i $STAGE/ollama-image.tar.gz
             mkdir -p $NAS_DIR/ollama
-            tar -C $NAS_DIR/ollama -xzf /tmp/ollama-models.tar.gz
-            rm -f /tmp/ollama-image.tar.gz /tmp/ollama-models.tar.gz
+            tar -C $NAS_DIR/ollama -xf $STAGE/ollama-models.tar
+            rm -f $STAGE/ollama-image.tar.gz $STAGE/ollama-models.tar
             if [ -f $NAS_DIR/compose.yaml ]; then
               cd $NAS_DIR && /usr/local/bin/docker compose up -d llm && sleep 3
               /usr/local/bin/docker compose exec -T llm ollama list
