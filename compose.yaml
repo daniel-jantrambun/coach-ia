@@ -1,4 +1,4 @@
-# Déploiement sur le DS720+ (Container Manager) : /volume1/coach-ia/compose.yaml
+# Déploiement sur le DS720+ (Container Manager) : /volume1/docker/coach-ia/compose.yaml
 # Copié par la CI à chaque déploiement, avec l'image de l'app épinglée sur le commit.
 services:
   app:

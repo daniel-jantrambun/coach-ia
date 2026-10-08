@@ -105,14 +105,14 @@ Secrets et variables du dépôt (Settings → Secrets and variables → Actions)
 
 ### Première installation
 
-1. Sur le NAS : créer `/volume1/coach-ia/` et y placer le `.env` (`COACH_SECRET_KEY`, voir
+1. Sur le NAS : créer `/volume1/docker/coach-ia/` et y placer le `.env` (`COACH_SECRET_KEY`, voir
    [.env.example](.env.example)), lisible par root uniquement (`chmod 600`).
 2. Lancer le workflow **Install Ollama on Synology**.
 3. Relancer le workflow de déploiement (ou pousser sur `main`).
 4. Créer les comptes :
 
    ```bash
-   cd /volume1/coach-ia && sudo docker compose exec app coach add-user benjamin --name Benjamin
+   cd /volume1/docker/coach-ia && sudo docker compose exec app coach add-user benjamin --name Benjamin
    ```
 
 L'app est alors sur `http://<ip-du-nas>:8000`, depuis le réseau local ou le WireGuard.
@@ -121,7 +121,7 @@ Synchro Garmin nocturne de tous les comptes connectés : tâche planifiée DSM (
 Planificateur de tâches, en root) :
 
 ```bash
-cd /volume1/coach-ia && /usr/local/bin/docker compose exec -T app coach sync-garmin --all
+cd /volume1/docker/coach-ia && /usr/local/bin/docker compose exec -T app coach sync-garmin --all
 ```
 
 Sauvegarder `data/coach.sqlite` (Hyper Backup) et `COACH_SECRET_KEY` séparément.

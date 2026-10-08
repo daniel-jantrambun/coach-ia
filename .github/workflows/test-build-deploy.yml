@@ -15,6 +15,8 @@ env:
   IMAGE: ghcr.io/${{ github.repository_owner }}/coach-ia
   NAS_PLATFORM: linux/amd64
   NAS_DIR: /volume1/docker/coach-ia
+  # Transit des fichiers envoyés au NAS (le préfixe @ le masque dans File Station).
+  STAGE: /volume1/@coach-ia-incoming
 
 jobs:
   test:
@@ -114,9 +116,10 @@ jobs:
           # Garde-fou : l'image exportée doit correspondre à l'architecture du NAS.
           [ "$(nas uname -m)" = x86_64 ] || { echo "Le NAS n'est plus en x86_64 : adapter NAS_PLATFORM" >&2; exit 1; }
 
-          # /tmp est sur la partition système de DSM (~2 Go) : on transite par un dossier du volume.
-          STAGE=$NAS_DIR/.incoming
+          # /tmp est sur la partition système de DSM (~2 Go) : on transite par un dossier du volume, hors des
+          # dossiers partagés (leurs ACL Synology empêchent ci-github d'y écrire, même après chown).
           echo "$SSHPASS" | nas "sudo -S -p '' sh -euc 'mkdir -p $STAGE && chown $NAS_USER $STAGE && chmod 700 $STAGE'"
+          nas "test -w $STAGE" || { echo "$NAS_USER ne peut pas écrire dans $STAGE" >&2; exit 1; }
           REMOTE_TAR=$STAGE/coach-image.tar.gz
           REMOTE_COMPOSE=$STAGE/compose.yaml
 
