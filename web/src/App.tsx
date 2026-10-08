@@ -1,0 +1,82 @@
+import { Navigate, NavLink, Route, Routes } from "react-router";
+import { useAuth } from "./auth";
+import { ActivitiesPage } from "./pages/Activities";
+import { LoginPage } from "./pages/Login";
+import { NewPlanPage } from "./pages/NewPlan";
+import { PlanPage } from "./pages/Plan";
+import { ProfilePage } from "./pages/Profile";
+import { Spinner } from "./ui";
+
+const NAV = [
+  { to: "/", label: "Mon plan", icon: "📅" },
+  { to: "/activites", label: "Activités", icon: "📈" },
+  { to: "/profil", label: "Profil", icon: "👤" },
+];
+
+export function App() {
+  const { user, loading } = useAuth();
+
+  if (loading) {
+    return (
+      <div className="grid min-h-dvh place-items-center">
+        <Spinner />
+      </div>
+    );
+  }
+  if (!user) return <LoginPage />;
+
+  return (
+    <div className="min-h-dvh pb-20 sm:pb-0">
+      <header className="sticky top-0 z-10 border-b border-border bg-surface/90 backdrop-blur">
+        <div className="mx-auto flex h-14 max-w-3xl items-center justify-between px-4">
+          <span className="font-semibold">🏃 Coach IA</span>
+          <nav className="hidden gap-1 sm:flex">
+            {NAV.map((item) => (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                end={item.to === "/"}
+                className={({ isActive }) =>
+                  `rounded-lg px-3 py-1.5 text-sm ${isActive ? "bg-surface-2 font-medium text-ink" : "text-ink-2 hover:text-ink"}`
+                }
+              >
+                {item.label}
+              </NavLink>
+            ))}
+          </nav>
+          <span className="text-sm text-ink-3 sm:hidden">{user.display_name}</span>
+        </div>
+      </header>
+
+      <main className="mx-auto max-w-3xl space-y-4 px-4 py-4 sm:py-6">
+        <Routes>
+          <Route path="/" element={<PlanPage />} />
+          <Route path="/plans/nouveau" element={<NewPlanPage />} />
+          <Route path="/plans/:planId" element={<PlanPage />} />
+          <Route path="/activites" element={<ActivitiesPage />} />
+          <Route path="/profil" element={<ProfilePage />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </main>
+
+      {/* Barre d'onglets en bas sur téléphone */}
+      <nav className="fixed inset-x-0 bottom-0 z-10 grid grid-cols-3 border-t border-border bg-surface pb-[env(safe-area-inset-bottom)] sm:hidden">
+        {NAV.map((item) => (
+          <NavLink
+            key={item.to}
+            to={item.to}
+            end={item.to === "/"}
+            className={({ isActive }) =>
+              `flex flex-col items-center gap-0.5 py-2 text-xs ${isActive ? "font-medium text-accent" : "text-ink-3"}`
+            }
+          >
+            <span aria-hidden className="text-lg leading-none">
+              {item.icon}
+            </span>
+            {item.label}
+          </NavLink>
+        ))}
+      </nav>
+    </div>
+  );
+}

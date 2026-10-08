@@ -25,12 +25,23 @@ résumée et revue dans [docs/architecture.md](docs/architecture.md).
 | # | Étape | État |
 |---|-------|------|
 | 1 | Import des activités (FIT Garmin, sync Garmin Connect) → SQLite | ✅ code prêt, à tester sur les vraies données |
-| 2 | Exploration : charge hebdo, CTL/ATL/TSB | 🟡 API `/load`, pas encore d'UI |
+| 2 | Exploration : charge hebdo, CTL/ATL/TSB | ✅ écran Activités (forme / fatigue) |
 | 3 | Modèle v1 : prédiction de performance (XGBoost) | ⏳ |
 | 4 | Planificateur v1 déterministe + garde-fous | ✅ course à pied |
 | 5 | Rédaction des séances par le LLM 3B | ✅ code prêt, à tester sur le NAS |
 | 6 | Feedback (RPE) → ajustement du plan | ⏳ |
 | 7 | Détection de fatigue, recalibrage mensuel | ⏳ |
+
+## Interface web
+
+React + Vite + TypeScript + Tailwind dans [web/](web/), servie par FastAPI (un seul conteneur). Pensée pour le
+téléphone, en clair/sombre selon le réglage de l'appareil :
+
+- **Mon plan** : objectif, allures, semaines dépliables (semaine en cours mise en avant), rédaction par le LLM.
+- **Activités** : fraîcheur du jour, courbes forme/fatigue, import de fichiers, synchro Garmin.
+- **Profil** : FC repos/max, connexion du compte Garmin (MFA compris), mot de passe.
+
+L'API est sous `/api` (docs : `/api/docs`).
 
 ## Comptes et Garmin
 
@@ -58,8 +69,14 @@ python3.14 -m venv .venv && .venv/bin/pip install -e '.[dev]'
 .venv/bin/coach plan --user benjamin --distance 21.1 --target 1:45:00 --race-date 2027-02-07 --runs 4
 # Faire rédiger la 1re semaine par le LLM (Ollama local : ollama pull qwen2.5:3b)
 .venv/bin/coach narrate --user benjamin 1 --week 0
-# API (docs sur http://localhost:8000/docs)
+# API (docs sur http://localhost:8000/api/docs)
 .venv/bin/uvicorn coach.api:app --reload
+```
+
+```bash
+# Interface web en dev (http://localhost:5173, /api relayé vers :8000)
+cd web && npm install && npm run dev
+npm run lint && npm run build
 ```
 
 ## Déploiement sur le NAS

@@ -34,48 +34,48 @@ def conn(settings):
 
 def client_for(settings, username):
     client = TestClient(create_app(settings))
-    assert client.post("/login", json={"username": username, "password": PASSWORD}).status_code == 200
+    assert client.post("/api/login", json={"username": username, "password": PASSWORD}).status_code == 200
     return client
 
 
 def test_routes_require_login(settings, conn):
     client = TestClient(create_app(settings))
-    for path in ("/me", "/activities", "/plans", "/load", "/me/garmin"):
+    for path in ("/api/me", "/api/activities", "/api/plans", "/api/load", "/api/me/garmin"):
         assert client.get(path).status_code == 401
 
 
 def test_plans_are_isolated_between_users(settings, conn):
     alice, bob = client_for(settings, "alice"), client_for(settings, "bob")
-    plan_id = alice.post("/plans", json=GOAL).json()["id"]
-    assert alice.get(f"/plans/{plan_id}").status_code == 200
-    assert bob.get(f"/plans/{plan_id}").status_code == 404
-    assert bob.post(f"/plans/{plan_id}/narrate").status_code == 404
-    assert bob.get("/plans").json() == []
+    plan_id = alice.post("/api/plans", json=GOAL).json()["id"]
+    assert alice.get(f"/api/plans/{plan_id}").status_code == 200
+    assert bob.get(f"/api/plans/{plan_id}").status_code == 404
+    assert bob.post(f"/api/plans/{plan_id}/narrate").status_code == 404
+    assert bob.get("/api/plans").json() == []
 
 
 def test_wrong_password_then_lockout(settings, conn):
     client = TestClient(create_app(settings))
     for _ in range(auth.MAX_FAILURES):
-        assert client.post("/login", json={"username": "alice", "password": "nope"}).status_code == 401
+        assert client.post("/api/login", json={"username": "alice", "password": "nope"}).status_code == 401
     # Même le bon mot de passe est refusé pendant le blocage.
-    assert client.post("/login", json={"username": "alice", "password": PASSWORD}).status_code == 401
+    assert client.post("/api/login", json={"username": "alice", "password": PASSWORD}).status_code == 401
 
 
 def test_logout_and_password_change_end_sessions(settings, conn):
     client = client_for(settings, "alice")
-    assert client.post("/me/password", json={"current_password": PASSWORD, "new_password": "un autre secret"}
+    assert client.post("/api/me/password", json={"current_password": PASSWORD, "new_password": "un autre secret"}
                        ).status_code == 204
-    assert client.get("/me").status_code == 401
+    assert client.get("/api/me").status_code == 401
     client = TestClient(create_app(settings))
-    client.post("/login", json={"username": "alice", "password": "un autre secret"})
-    client.post("/logout")
-    assert client.get("/me").status_code == 401
+    client.post("/api/login", json={"username": "alice", "password": "un autre secret"})
+    client.post("/api/logout")
+    assert client.get("/api/me").status_code == 401
 
 
 def test_profile_update(settings, conn):
     client = client_for(settings, "alice")
-    assert client.patch("/me", json={"hr_rest": 48, "hr_max": 190}).json()["hr_max"] == 190
-    assert client.patch("/me", json={"hr_max": 400}).status_code == 422
+    assert client.patch("/api/me", json={"hr_rest": 48, "hr_max": 190}).json()["hr_max"] == 190
+    assert client.patch("/api/me", json={"hr_max": 400}).status_code == 422
 
 
 def test_garmin_tokens_are_encrypted_and_never_the_password(settings, conn):
@@ -95,7 +95,7 @@ def test_garmin_tokens_are_encrypted_and_never_the_password(settings, conn):
 
 def test_garmin_requires_secret_key(settings, conn):
     client = client_for(dataclasses.replace(settings, secret_key=None), "alice")
-    response = client.post("/me/garmin", json={"email": "a@b.c", "password": "x"})
+    response = client.post("/api/me/garmin", json={"email": "a@b.c", "password": "x"})
     assert response.status_code == 400 and "COACH_SECRET_KEY" in response.json()["detail"]
 
 
@@ -107,3 +107,16 @@ def test_nested_zip_from_garmin_export(tmp_path):
         z.writestr("DI_CONNECT/DI-Connect-Uploaded-Files/UploadedFiles_0-_Part1.zip", inner.getvalue())
         z.writestr("DI_CONNECT/other.json", b"{}")
     assert [payload for _, payload in iter_fit_payloads(tmp_path)] == [b"fit-data"]
+
+
+def test_serves_web_app_with_spa_fallback(settings, conn, tmp_path):
+    web = tmp_path / "web"
+    (web / "assets").mkdir(parents=True)
+    (web / "index.html").write_text("<div id=root></div>")
+    (web / "assets" / "app.js").write_text("console.log(1)")
+    (tmp_path / "secret.txt").write_text("nope")
+    client = TestClient(create_app(dataclasses.replace(settings, web_dir=web)))
+    assert client.get("/assets/app.js").text == "console.log(1)"
+    assert client.get("/plans/3").text == "<div id=root></div>"  # route du front
+    assert client.get("/api/inconnu").status_code == 404
+    assert "nope" not in client.get("/../secret.txt").text
