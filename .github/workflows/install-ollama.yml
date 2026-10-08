@@ -1,0 +1,74 @@
+name: Install Ollama on Synology
+
+# À lancer à la main : au premier déploiement, puis pour changer de version d'Ollama ou de modèle.
+# Le NAS n'accède pas aux registres : le runner télécharge l'image et le modèle, puis les transfère.
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: Modèle Ollama à installer (doit correspondre à COACH_LLM_MODEL dans le .env du NAS)
+        default: qwen2.5:3b
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  NAS_PLATFORM: linux/amd64
+  NAS_DIR: /volume1/coach-ia
+
+jobs:
+  install:
+    runs-on: ubuntu-latest
+    concurrency: deploy-nas
+    steps:
+      - uses: actions/checkout@v4
+
+      # La version d'Ollama vient du compose.yaml : une seule source de vérité.
+      - name: Download Ollama image and model
+        run: |
+          OLLAMA_IMAGE=$(grep -o 'ollama/ollama:[^ "]*' compose.yaml)
+          echo "OLLAMA_IMAGE=$OLLAMA_IMAGE" >> "$GITHUB_ENV"
+          docker pull --platform "$NAS_PLATFORM" "$OLLAMA_IMAGE"
+          docker save --platform "$NAS_PLATFORM" "$OLLAMA_IMAGE" | gzip > ollama-image.tar.gz
+
+          mkdir ollama-data
+          docker run -d --name ollama -v "$PWD/ollama-data:/root/.ollama" "$OLLAMA_IMAGE"
+          sleep 5
+          docker exec ollama ollama pull "${{ inputs.model }}"
+          docker rm -f ollama
+          sudo tar -C ollama-data -czf ollama-models.tar.gz models
+          ls -lh ollama-image.tar.gz ollama-models.tar.gz
+
+      - name: Connect WireGuard
+        run: |
+          sudo apt-get update && sudo apt-get install -y wireguard-tools resolvconf sshpass
+          echo "${{ secrets.WG_CONFIG }}" | sudo tee /etc/wireguard/wg0.conf > /dev/null
+          sudo chmod 600 /etc/wireguard/wg0.conf
+          sudo wg-quick up wg0
+
+      - name: Install on Synology
+        env:
+          SSHPASS: ${{ secrets.CI_GITHUB_PWD }}
+          TARGET: ${{ vars.JUPITER_USER }}@${{ vars.JUPITER_IP }}
+        run: |
+          nas() { sshpass -e ssh -p 22822 -o StrictHostKeyChecking=no "$TARGET" "$@"; }
+          [ "$(nas uname -m)" = x86_64 ] || { echo "Le NAS n'est plus en x86_64 : adapter NAS_PLATFORM" >&2; exit 1; }
+
+          nas "cat > /tmp/ollama-image.tar.gz" < ollama-image.tar.gz
+          nas "cat > /tmp/ollama-models.tar.gz" < ollama-models.tar.gz
+
+          # Les modèles déjà présents sont conservés ; le nouveau s'ajoute à côté.
+          echo "$SSHPASS" | nas "sudo -S -p '' sh -euc '
+            /usr/local/bin/docker load -i /tmp/ollama-image.tar.gz
+            mkdir -p $NAS_DIR/ollama
+            tar -C $NAS_DIR/ollama -xzf /tmp/ollama-models.tar.gz
+            rm -f /tmp/ollama-image.tar.gz /tmp/ollama-models.tar.gz
+            if [ -f $NAS_DIR/compose.yaml ]; then
+              cd $NAS_DIR && /usr/local/bin/docker compose up -d llm && sleep 3
+              /usr/local/bin/docker compose exec -T llm ollama list
+            fi'"
+
+      - name: Disconnect
+        if: always()
+        run: sudo wg-quick down wg0

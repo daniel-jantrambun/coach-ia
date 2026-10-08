@@ -1,0 +1,147 @@
+name: Test, build Docker image and deploy it on Synology
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/coach-ia
+  NAS_PLATFORM: linux/amd64
+  NAS_DIR: /volume1/coach-ia
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Test API
+        run: |
+          pip install -e '.[dev]'
+          ruff check src tests
+          pytest -q
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Lint and build web
+        working-directory: web
+        run: |
+          npm ci
+          npm run lint
+          npm run build
+
+  deploy:
+    needs: test
+    # Les PR sont testées, mais seul main (ou un tag) part sur le NAS, une fois les variables du NAS configurées.
+    if: github.event_name != 'pull_request' && vars.JUPITER_IP != ''
+    runs-on: ubuntu-latest
+    concurrency: deploy-nas
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+            type=sha
+
+      # Le front est construit dans le Dockerfile (étape node). Une seule architecture : celle du NAS.
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ env.NAS_PLATFORM }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Le Synology n'accède pas à ghcr.io (son VPN client bloque le TLS) : on exporte ici l'image,
+      # avant WireGuard qui coupe l'accès DNS/Internet du runner.
+      - name: Export image for the NAS
+        run: |
+          TAG="sha-${GITHUB_SHA::7}"
+          docker pull --platform "$NAS_PLATFORM" "$IMAGE:$TAG"
+          docker save --platform "$NAS_PLATFORM" "$IMAGE:$TAG" | gzip > coach-image.tar.gz
+          ls -lh coach-image.tar.gz
+
+      - name: Connect WireGuard
+        run: |
+          sudo apt-get update && sudo apt-get install -y wireguard-tools resolvconf sshpass
+          echo "${{ secrets.WG_CONFIG }}" | sudo tee /etc/wireguard/wg0.conf > /dev/null
+          sudo chmod 600 /etc/wireguard/wg0.conf
+          sudo wg-quick up wg0
+
+      # Transfère l'image et le compose.yaml du dépôt, puis docker load + compose up -d.
+      # Le .env (COACH_SECRET_KEY) et data/ restent sur le NAS et ne transitent jamais par la CI.
+      # Le mot de passe est envoyé sur stdin pour sudo -S : il n'apparaît pas dans la ligne de commande distante.
+      - name: Deploy on Synology
+        env:
+          SSHPASS: ${{ secrets.CI_GITHUB_PWD }}
+          TARGET: ${{ vars.JUPITER_USER }}@${{ vars.JUPITER_IP }}
+        run: |
+          TAG="sha-${GITHUB_SHA::7}"
+          REMOTE_TAR=/tmp/coach-image.tar.gz
+          REMOTE_COMPOSE=/tmp/coach-compose.yaml
+          nas() { sshpass -e ssh -p 22822 -o StrictHostKeyChecking=no "$TARGET" "$@"; }
+
+          # Garde-fou : l'image exportée doit correspondre à l'architecture du NAS.
+          [ "$(nas uname -m)" = x86_64 ] || { echo "Le NAS n'est plus en x86_64 : adapter NAS_PLATFORM" >&2; exit 1; }
+
+          nas "cat > $REMOTE_TAR" < coach-image.tar.gz
+          nas "cat > $REMOTE_COMPOSE" < compose.yaml
+
+          echo "$SSHPASS" | nas "sudo -S -p '' sh -euc '
+            [ -f $NAS_DIR/.env ] || { echo \"$NAS_DIR/.env manquant (voir README, installation du NAS)\" >&2; exit 1; }
+            /usr/local/bin/docker load -i $REMOTE_TAR
+            rm -f $REMOTE_TAR
+            # Seule l image de l app est épinglée sur ce commit ; celle d Ollama reste inchangée.
+            sed \"s#^\\( *image: ghcr.io/[^/]*/coach-ia\\):.*#\\1:$TAG#\" $REMOTE_COMPOSE > $NAS_DIR/compose.yaml
+            rm -f $REMOTE_COMPOSE
+            grep image: $NAS_DIR/compose.yaml
+            cd $NAS_DIR
+            /usr/local/bin/docker compose up -d --remove-orphans'"
+
+      - name: Check the app answers
+        env:
+          SSHPASS: ${{ secrets.CI_GITHUB_PWD }}
+          TARGET: ${{ vars.JUPITER_USER }}@${{ vars.JUPITER_IP }}
+        run: |
+          nas() { sshpass -e ssh -p 22822 -o StrictHostKeyChecking=no "$TARGET" "$@"; }
+          for _ in $(seq 1 10); do
+            nas "curl -fsS http://localhost:8000/api/health" && exit 0
+            sleep 3
+          done
+          echo "L'app ne répond pas sur le NAS après le déploiement" >&2
+          exit 1
+
+      - name: Disconnect
+        if: always()
+        run: sudo wg-quick down wg0

@@ -1,8 +1,10 @@
 # Déploiement sur le DS720+ (Container Manager) : /volume1/coach-ia/compose.yaml
+# Copié par la CI à chaque déploiement, avec l'image de l'app épinglée sur le commit.
 services:
   app:
     image: ghcr.io/daniel-jantrambun/coach-ia:latest
-    build: .
+    # Le NAS n'accède pas aux registres : l'image est chargée par la CI (docker load).
+    pull_policy: never
     restart: unless-stopped
     env_file: .env
     environment:
@@ -15,9 +17,10 @@ services:
       - llm
 
   # LLM 3B local. Le modèle est déchargé de la RAM après 5 min d'inactivité.
-  # À la première installation : docker compose exec llm ollama pull qwen2.5:3b
+  # Image et modèle installés par le workflow manuel « Install Ollama on Synology ».
   llm:
-    image: ollama/ollama:latest
+    image: ollama/ollama:0.40.1
+    pull_policy: never
     restart: unless-stopped
     environment:
       OLLAMA_KEEP_ALIVE: 5m

@@ -81,13 +81,41 @@ npm run lint && npm run build
 
 ## Déploiement sur le NAS
 
-`compose.yaml` lance deux conteneurs : `app` (FastAPI + planificateur, SQLite dans `./data`) et `llm` (Ollama,
-limité à 3 Go de RAM). Après le premier démarrage :
+Deux conteneurs ([compose.yaml](compose.yaml)) : `app` (FastAPI + front, SQLite dans `./data`) et `llm` (Ollama,
+3 Go de RAM max). Le NAS n'accède pas aux registres Docker : c'est la CI qui télécharge et transfère les images
+via WireGuard, comme pour `cv-bd`.
 
-```bash
-docker compose exec llm ollama pull qwen2.5:3b
-docker compose exec app coach add-user benjamin --name Benjamin
-```
+### Workflows GitHub Actions
+
+- **Test, build Docker image and deploy it on Synology** (à chaque push) : tests Python + lint/build du front, puis
+  sur `main` : image `ghcr.io/daniel-jantrambun/coach-ia`, transfert au NAS, `docker load`, copie du
+  `compose.yaml` (image épinglée sur le commit), `docker compose up -d`, vérification de `/api/health`.
+  Le déploiement est ignoré tant que la variable `JUPITER_IP` n'est pas configurée.
+- **Install Ollama on Synology** (manuel) : télécharge l'image Ollama et le modèle sur le runner, les installe sur
+  le NAS. À lancer avant le premier déploiement, puis pour changer de version ou de modèle.
+
+Secrets et variables du dépôt (Settings → Secrets and variables → Actions), les mêmes que pour `cv-bd` :
+
+| Nom | Type | Contenu |
+|---|---|---|
+| `WG_CONFIG` | secret | config WireGuard du runner |
+| `CI_GITHUB_PWD` | secret | mot de passe de l'utilisateur SSH du NAS |
+| `JUPITER_USER` | variable | utilisateur SSH du NAS |
+| `JUPITER_IP` | variable | IP du NAS dans le WireGuard |
+
+### Première installation
+
+1. Sur le NAS : créer `/volume1/coach-ia/` et y placer le `.env` (`COACH_SECRET_KEY`, voir
+   [.env.example](.env.example)), lisible par root uniquement (`chmod 600`).
+2. Lancer le workflow **Install Ollama on Synology**.
+3. Relancer le workflow de déploiement (ou pousser sur `main`).
+4. Créer les comptes :
+
+   ```bash
+   cd /volume1/coach-ia && sudo docker compose exec app coach add-user benjamin --name Benjamin
+   ```
+
+L'app est alors sur `http://<ip-du-nas>:8000`, depuis le réseau local ou le WireGuard.
 
 Synchro Garmin nocturne de tous les comptes connectés : tâche planifiée DSM (Panneau de configuration →
 Planificateur de tâches, en root) :
@@ -97,9 +125,6 @@ cd /volume1/coach-ia && /usr/local/bin/docker compose exec -T app coach sync-gar
 ```
 
 Sauvegarder `data/coach.sqlite` (Hyper Backup) et `COACH_SECRET_KEY` séparément.
-
-Accès distant via le WireGuard existant. Le workflow GitHub Actions (build + WireGuard + `docker load`) reste à
-reprendre de `cv-bd`.
 
 ## Configuration
 
