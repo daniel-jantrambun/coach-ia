@@ -117,8 +117,9 @@ via WireGuard, comme pour `cv-bd`.
 
 - **Test, build Docker image and deploy it on Synology** (à chaque push) : tests Python + lint/build du front, puis
   sur `main` : image `ghcr.io/daniel-jantrambun/savapav`, transfert au NAS, `docker load`, copie du
-  `compose.yaml` (image épinglée sur le commit), `docker compose up -d`, vérification de `/api/health`.
-  Le déploiement est ignoré tant que la variable `JUPITER_IP` n'est pas configurée.
+  `compose.yaml` (image épinglée sur le commit), `docker compose up -d`, déclaration du projet `savapav` dans Container Manager s'il
+  n'existe pas (non bloquant), vérification de `/api/health`.
+  Le déploiement est ignoré tant que la variable `SYNOLOGY_PRIVATE_IP` n'est pas configurée.
 - **Install Ollama on Synology** (manuel) : télécharge l'image Ollama et le modèle sur le runner, les installe sur
   le NAS. À lancer avant le premier déploiement, puis pour changer de version ou de modèle.
 
@@ -127,14 +128,15 @@ Secrets et variables du dépôt (Settings → Secrets and variables → Actions)
 | Nom | Type | Contenu |
 |---|---|---|
 | `WG_CONFIG` | secret | config WireGuard du runner |
-| `CI_GITHUB_PWD` | secret | mot de passe de l'utilisateur SSH du NAS |
-| `JUPITER_USER` | variable | utilisateur SSH du NAS |
-| `JUPITER_IP` | variable | IP du NAS dans le WireGuard |
+| `SYNOLOGY_USER_PWD` | secret | mot de passe de l'utilisateur SSH du NAS |
+| `COACH_SECRET_KEY` | secret | phrase secrète écrite dans le `.env` du NAS à chaque déploiement (voir [.env.example](.env.example)) |
+| `SYNOLOGY_USER_LOGIN` | variable | utilisateur SSH du NAS |
+| `SYNOLOGY_PRIVATE_IP` | variable | IP du NAS dans le WireGuard |
 
 ### Première installation
 
-1. Sur le NAS : créer `/volume1/docker/savapav/` et y placer le `.env` (`COACH_SECRET_KEY`, voir
-   [.env.example](.env.example)), lisible par root uniquement (`chmod 600`).
+1. Créer le secret `COACH_SECRET_KEY` du dépôt. Le déploiement crée `/volume1/docker/savapav/.env` à partir de
+   [.env.example](.env.example) s'il n'existe pas, y écrit le secret et le rend lisible par root uniquement.
 2. Lancer le workflow **Install Ollama on Synology**.
 3. Relancer le workflow de déploiement (ou pousser sur `main`).
 4. Ouvrir l'app et créer le compte administrateur, puis les comptes de la famille (page **Comptes**).

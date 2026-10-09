@@ -2,12 +2,12 @@ name: Test, build Docker image and deploy it on Synology
 
 on:
   push:
-    branches: [main]
-    tags: ["v*"]
-    paths:
-      - "compose.yaml"
-      - "Dockerfile"
-      - "web/**"
+    # branches: [main]
+    # tags: ["v*"]
+    # paths:
+    #   - "compose.yaml"
+    #   - "Dockerfile"
+    #   - "web/**"
     #   - ".github/workflows/test-build-deploy.yml"
   pull_request:
   workflow_dispatch:
@@ -57,7 +57,7 @@ jobs:
   deploy:
     needs: test
     # Les PR sont testées, mais seul main (ou un tag) part sur le NAS, une fois les variables du NAS configurées.
-    if: github.event_name != 'pull_request' && vars.JUPITER_IP != ''
+    if: github.event_name != 'pull_request' && vars.SYNOLOGY_PRIVATE_IP != ''
     runs-on: ubuntu-latest
     # Le temps passé en attente (concurrency) ne compte pas : seulement l'exécution du job.
     timeout-minutes: 40
@@ -111,15 +111,41 @@ jobs:
           sudo chmod 600 /etc/wireguard/wg0.conf
           sudo wg-quick up wg0
 
+      # Crée le .env du NAS à partir de .env.example s'il n'existe pas, puis y écrit le secret COACH_SECRET_KEY
+      # (à chaque déploiement : le secret GitHub fait foi). Les autres variables du .env ne sont pas touchées.
+      # stdin = mot de passe sudo, secret, puis .env.example : sudo -S lit le mot de passe octet par octet
+      # jusqu'au saut de ligne, la suite parvient au script. Le secret n'apparaît dans aucune ligne de commande.
+      - name: Write env file on NAS
+        timeout-minutes: 3
+        env:
+          SSHPASS: ${{ secrets.SYNOLOGY_USER_PWD }}
+          TARGET: ${{ vars.SYNOLOGY_USER_LOGIN }}@${{ vars.SYNOLOGY_PRIVATE_IP }}
+          COACH_SECRET_KEY: ${{ secrets.COACH_SECRET_KEY }}
+        run: |
+          nas() { sshpass -e ssh -p 22822 -o StrictHostKeyChecking=no "$TARGET" "$@"; }
+          [ -n "$COACH_SECRET_KEY" ] || { echo "Secret COACH_SECRET_KEY non configuré dans le dépôt" >&2; exit 1; }
+          { printf '%s\n%s\n' "$SSHPASS" "$COACH_SECRET_KEY"; cat .env.example; } | nas "sudo -S -p '' sh -euc '
+            umask 077
+            IFS= read -r key
+            mkdir -p $NAS_DIR/data
+            if [ ! -f $NAS_DIR/.env ]; then
+              cat > $NAS_DIR/.env
+              echo \"$NAS_DIR/.env créé à partir de .env.example\"
+            fi
+            { grep -v \"^COACH_SECRET_KEY=\" $NAS_DIR/.env || true; printf \"COACH_SECRET_KEY=%s\n\" \"\$key\"; } > $NAS_DIR/.env.tmp
+            cat $NAS_DIR/.env.tmp > $NAS_DIR/.env
+            rm $NAS_DIR/.env.tmp
+            chmod 600 $NAS_DIR/.env'"
+
       # Transfère l'image et le compose.yaml du dépôt, puis docker load + compose up -d.
-      # Le .env (COACH_SECRET_KEY) et data/ restent sur le NAS et ne transitent jamais par la CI.
+      # data/ reste sur le NAS et ne transite jamais par la CI.
       # Le mot de passe est envoyé sur stdin pour sudo -S : il n'apparaît pas dans la ligne de commande distante.
       - name: Deploy on Synology
         timeout-minutes: 15
         env:
-          SSHPASS: ${{ secrets.CI_GITHUB_PWD }}
-          TARGET: ${{ vars.JUPITER_USER }}@${{ vars.JUPITER_IP }}
-          NAS_USER: ${{ vars.JUPITER_USER }}
+          SSHPASS: ${{ secrets.SYNOLOGY_USER_PWD }}
+          TARGET: ${{ vars.SYNOLOGY_USER_LOGIN }}@${{ vars.SYNOLOGY_PRIVATE_IP }}
+          NAS_USER: ${{ vars.SYNOLOGY_USER_NAME }}
         run: |
           TAG="sha-${GITHUB_SHA::7}"
           nas() { sshpass -e ssh -p 22822 -o StrictHostKeyChecking=no "$TARGET" "$@"; }
@@ -150,11 +176,41 @@ jobs:
             mkdir -p data ollama
             /usr/local/bin/docker compose up -d --remove-orphans'"
 
+      # Déclare le projet dans Container Manager s'il n'y est pas, sur $NAS_DIR et son compose.yaml : les
+      # conteneurs lancés par la CI (projet compose du même nom) y apparaissent alors comme un projet géré.
+      # La méthode create de SYNO.Docker.Project n'est pas documentée (paramètres repris de l'interface DSM) :
+      # en cas d'échec, le déploiement n'est pas bloqué, il suffit de créer le projet à la main.
+      # Le script distant est envoyé sur stdin après le mot de passe sudo, pour éviter un niveau de guillemets.
+      - name: Ensure Container Manager project
+        continue-on-error: true
+        timeout-minutes: 3
+        env:
+          SSHPASS: ${{ secrets.SYNOLOGY_USER_PWD }}
+          TARGET: ${{ vars.SYNOLOGY_USER_LOGIN }}@${{ vars.SYNOLOGY_PRIVATE_IP }}
+        run: |
+          nas() { sshpass -e ssh -p 22822 -o StrictHostKeyChecking=no "$TARGET" "$@"; }
+          PROJECT=$(basename "$NAS_DIR")
+          # Chemin relatif aux dossiers partagés, comme l'attend Container Manager : /docker/savapav
+          SHARE_PATH=${NAS_DIR#/volume[0-9]}
+          # compose.yaml épinglé du NAS, encodé en chaîne JSON puis échappé pour des guillemets simples sh.
+          CONTENT=$(echo "$SSHPASS" | nas "sudo -S -p '' cat $NAS_DIR/compose.yaml" | jq -Rs .)
+          CONTENT=${CONTENT//\'/\'\\\'\'}
+          { echo "$SSHPASS"; cat <<EOF
+          set -eu
+          api() { /usr/syno/bin/synowebapi --exec api=SYNO.Docker.Project version=1 "\$@"; }
+          exists() { api method=list | grep -q '"name" *: *"$PROJECT"'; }
+          if exists; then echo "Projet $PROJECT déjà présent dans Container Manager"; exit 0; fi
+          api method=create name='"$PROJECT"' share_path='"$SHARE_PATH"' enable_service_portal=false content='$CONTENT'
+          exists || { echo "Projet $PROJECT non créé dans Container Manager : le créer à la main" >&2; exit 1; }
+          echo "Projet $PROJECT créé dans Container Manager"
+          EOF
+          } | nas "sudo -S -p '' sh -s"
+
       - name: Check the app answers
         timeout-minutes: 3
         env:
-          SSHPASS: ${{ secrets.CI_GITHUB_PWD }}
-          TARGET: ${{ vars.JUPITER_USER }}@${{ vars.JUPITER_IP }}
+          SSHPASS: ${{ secrets.SYNOLOGY_USER_PWD }}
+          TARGET: ${{ vars.SYNOLOGY_USER_LOGIN }}@${{ vars.SYNOLOGY_PRIVATE_IP }}
         run: |
           nas() { sshpass -e ssh -p 22822 -o StrictHostKeyChecking=no "$TARGET" "$@"; }
           for _ in $(seq 1 10); do
