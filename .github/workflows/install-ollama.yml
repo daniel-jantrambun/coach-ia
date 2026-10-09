@@ -63,7 +63,7 @@ jobs:
                   TARGET:
                       ${{ vars.SYNOLOGY_USER_LOGIN }}@${{
                       vars.SYNOLOGY_PRIVATE_IP }}
-                  NAS_USER: ${{ vars.SYNOLOGY_USER_NAME }}
+                  NAS_USER: ${{ vars.SYNOLOGY_USER_LOGIN }}
               run: |
                   nas() { sshpass -e ssh -p 22822 -o StrictHostKeyChecking=no "$TARGET" "$@"; }
                   [ "$(nas uname -m)" = x86_64 ] || { echo "Le NAS n'est plus en x86_64 : adapter NAS_PLATFORM" >&2; exit 1; }
