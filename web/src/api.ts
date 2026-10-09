@@ -205,6 +205,16 @@ export type SyncProgress = {
   finished_at?: string | null;
 };
 
+export type ImportProgress = {
+  running: boolean;
+  files?: number;
+  imported?: number;
+  skipped?: number;
+  error?: string | null;
+  started_at?: string;
+  finished_at?: string | null;
+};
+
 export type GarminStatus = {
   connected: boolean;
   connected_at?: string;
@@ -277,15 +287,19 @@ export const api = {
   resetPassword: (id: number, new_password: string) =>
     request<void>("POST", `/admin/users/${id}/password`, { new_password }),
 
-  activities: (limit = 50, category?: Category) =>
-    request<Activity[]>("GET", `/activities?limit=${limit}${category ? `&category=${category}` : ""}`),
+  activities: (limit = 50, category?: Category, offset = 0) =>
+    request<Activity[]>(
+      "GET",
+      `/activities?limit=${limit}&offset=${offset}${category ? `&category=${category}` : ""}`,
+    ),
   activity: (id: string) => request<ActivityDetail>("GET", `/activities/${encodeURIComponent(id)}`),
   stats: (weeks: number) => request<Stats>("GET", `/stats?weeks=${weeks}`),
   importFile: (file: File) => {
     const form = new FormData();
     form.append("file", file);
-    return request<{ imported: number; skipped: number }>("POST", "/activities/import", form);
+    return request<ImportProgress>("POST", "/activities/import", form);
   },
+  importStatus: () => request<ImportProgress>("GET", "/activities/import"),
   load: (days = 120) => request<LoadPoint[]>("GET", `/load?days=${days}`),
 
   plans: () => request<PlanSummary[]>("GET", "/plans"),

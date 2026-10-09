@@ -8,10 +8,36 @@ import hashlib
 import io
 import zipfile
 from collections.abc import Iterator
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
 import fitdecode
+
+COMMIT_EVERY = 100  # fichiers : un gros export ne verrouille pas la base pendant tout l'import
+
+
+@dataclass
+class ImportProgress:
+    """Avancement d'un import de fichier (lu par l'interface pendant l'import en tâche de fond)."""
+
+    files: int = 0     # fichiers FIT lus
+    imported: int = 0  # activités importées
+    skipped: int = 0   # fichiers sans activité exploitable
+    running: bool = True
+    error: str | None = None
+    started_at: str = ""
+    finished_at: str | None = None
+
+    def __post_init__(self):
+        self.started_at = self.started_at or datetime.now(UTC).isoformat()
+
+    def finish(self, error: str | None = None) -> None:
+        self.running, self.error = False, error
+        self.finished_at = datetime.now(UTC).isoformat()
+
+    def to_dict(self) -> dict:
+        return asdict(self)
 
 
 def parse_fit(data: bytes) -> list[tuple[int, dict]]:
@@ -80,8 +106,10 @@ def iter_fit_payloads(root: Path, skip: frozenset[str] = frozenset()) -> Iterato
                 yield from _iter_zip(archive, str(path))
 
 
-def import_directory(conn, user_id: int, root: Path, only_new: bool = False) -> tuple[int, int]:
+def import_directory(conn, user_id: int, root: Path, only_new: bool = False,
+                     progress: ImportProgress | None = None) -> tuple[int, int]:
     """Importe tous les FIT d'un dossier pour un utilisateur. Renvoie (importés, ignorés).
+    `progress` est mis à jour au fil de l'eau (import en tâche de fond).
 
     `only_new` : ne relit pas les fichiers dont une activité est déjà en base (synchro Garmin : sans ça,
     chaque synchro relirait tout l'historique)."""
@@ -95,14 +123,19 @@ def import_directory(conn, user_id: int, root: Path, only_new: bool = False) -> 
                 "SELECT file_path FROM activities WHERE user_id = ? AND file_path IS NOT NULL", (user_id,)
             )
         )
+    progress = progress or ImportProgress()
     imported = skipped = 0
     for location, payload in iter_fit_payloads(root, known):
+        progress.files += 1
+        if progress.files % COMMIT_EVERY == 0:
+            conn.commit()
         try:
             sessions = parse_fit(payload)
         except fitdecode.FitError:
             sessions = []
         if not sessions:
             skipped += 1
+            progress.skipped = skipped
             continue
         # Identifiant stable basé sur le contenu : réimporter le même fichier ne crée pas de doublon.
         # La 1re session garde l'identifiant historique, les suivantes (multisport) prennent leur rang.
@@ -114,5 +147,6 @@ def import_directory(conn, user_id: int, root: Path, only_new: bool = False) -> 
             activity["file_path"] = location
             upsert_activity(conn, activity)
             imported += 1
+        progress.imported = imported
     conn.commit()
     return imported, skipped

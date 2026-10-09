@@ -26,10 +26,12 @@ def activities(conn, user_id: int, limit: int | None = None) -> list[dict]:
     return [dict(r) for r in conn.execute(sql, params)]
 
 
-def activities_with_category(conn, user_id: int, cat: str | None = None, limit: int | None = None) -> list[dict]:
+def activities_with_category(conn, user_id: int, cat: str | None = None, limit: int | None = None,
+                             offset: int = 0) -> list[dict]:
     rows = [{**a, "category": category(a["sport"], a.get("sub_sport"))} for a in activities(conn, user_id)]
     if cat:
         rows = [a for a in rows if a["category"] == cat]
+    rows = rows[offset:]
     return rows[:limit] if limit else rows
 
 

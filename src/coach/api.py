@@ -11,7 +11,7 @@ from coach import auth, service
 from coach.config import Settings, load_settings
 from coach.db import connect
 from coach.ingest import garmin
-from coach.ingest.fit_files import import_directory
+from coach.ingest.fit_files import ImportProgress, import_directory
 from coach.multisport import Preferences
 from coach.planner import Goal
 
@@ -74,6 +74,7 @@ def create_app(settings: Settings) -> FastAPI:
     narrate_errors: dict[int, str] = {}
     # Synchros Garmin complètes (tout l'historique), par utilisateur : longues, donc en tâche de fond.
     full_syncs: dict[int, garmin.SyncProgress] = {}
+    file_imports: dict[int, ImportProgress] = {}
 
     def db():
         # SQLite : une connexion par requête, simple et suffisant pour une famille.
@@ -268,8 +269,43 @@ def create_app(settings: Settings) -> FastAPI:
     # --- Activités et charge ---------------------------------------------------------------------------------
 
     @api.get("/activities")
-    def list_activities(user: User, conn: Conn, limit: int = 50, category: str | None = None):
-        return service.activities_with_category(conn, user["id"], category, limit)
+    def list_activities(user: User, conn: Conn, limit: int = 50, category: str | None = None,
+                        offset: int = Query(default=0, ge=0)):
+        return service.activities_with_category(conn, user["id"], category, limit, offset)
+
+    # Avant /activities/{activity_id}, qui capterait sinon « import ».
+    @api.get("/activities/import")
+    def import_file_status(user: User):
+        progress = file_imports.get(user["id"])
+        return progress.to_dict() if progress else {"running": False}
+
+    @api.post("/activities/import", status_code=202)
+    def import_file(file: UploadFile, user: User, background: BackgroundTasks):
+        """Import d'un .fit, ou d'un .zip (export complet Garmin compris), en tâche de fond : suivi par GET.
+        Un export complet prend plusieurs minutes, au-delà du délai du reverse proxy (504 de Web Station)."""
+        name = Path(file.filename or "upload").name
+        if not name.lower().endswith((".fit", ".zip")):
+            raise HTTPException(422, "Fichier .fit ou .zip attendu")
+        if (current := file_imports.get(user["id"])) and current.running:
+            raise HTTPException(409, "Import déjà en cours")
+        target = settings.fit_dir / str(user["id"]) / "uploads" / datetime.now(UTC).strftime("%Y%m%dT%H%M%S%f")
+        target.mkdir(parents=True)
+        with (target / name).open("wb") as out:
+            shutil.copyfileobj(file.file, out)
+        progress = file_imports[user["id"]] = ImportProgress()
+
+        def run():
+            bg_conn = connect(settings.db_path)
+            try:
+                import_directory(bg_conn, user["id"], target, progress=progress)
+                progress.finish()
+            except Exception as e:
+                progress.finish(f"Import interrompu : {e}")
+            finally:
+                bg_conn.close()
+
+        background.add_task(run)
+        return progress.to_dict()
 
     @api.get("/activities/{activity_id}")
     def get_activity(activity_id: str, user: User, conn: Conn):
@@ -281,19 +317,6 @@ def create_app(settings: Settings) -> FastAPI:
     @api.get("/stats")
     def stats(user: User, conn: Conn, weeks: int = Query(default=26, ge=4, le=104)):
         return service.stats(conn, user, date.today(), weeks)
-
-    @api.post("/activities/import")
-    def import_file(file: UploadFile, user: User, conn: Conn):
-        """Import d'un .fit, ou d'un .zip (export complet Garmin compris)."""
-        name = Path(file.filename or "upload").name
-        if not name.lower().endswith((".fit", ".zip")):
-            raise HTTPException(422, "Fichier .fit ou .zip attendu")
-        target = settings.fit_dir / str(user["id"]) / "uploads" / datetime.now(UTC).strftime("%Y%m%dT%H%M%S%f")
-        target.mkdir(parents=True)
-        with (target / name).open("wb") as out:
-            shutil.copyfileobj(file.file, out)
-        imported, skipped = import_directory(conn, user["id"], target)
-        return {"imported": imported, "skipped": skipped}
 
     @api.get("/load")
     def load(user: User, conn: Conn, days: int = 120):

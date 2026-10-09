@@ -138,10 +138,30 @@ Secrets et variables du dépôt (Settings → Secrets and variables → Actions)
 1. Créer le secret `COACH_SECRET_KEY` du dépôt. Le déploiement crée `/volume1/docker/savapav/.env` à partir de
    [.env.example](.env.example) s'il n'existe pas, y écrit le secret et le rend lisible par root uniquement.
 2. Lancer le workflow **Install Ollama on Synology**.
-3. Relancer le workflow de déploiement (ou pousser sur `main`).
+3. Relancer le workflow de déploiement (ou pousser sur `main`). Ce premier déploiement crée le projet `savapav`
+   dans Container Manager. Même si les conteneurs tournent déjà, Container Manager peut afficher le projet comme
+   arrêté : dans **Container Manager → Projet → savapav → Action**, cliquer sur **Construire** (*Build*) pour
+   qu'il passe à l'état **En cours d'exécution**. À ne faire qu'une fois.
 4. Ouvrir l'app et créer le compte administrateur, puis les comptes de la famille (page **Comptes**).
 
 L'app est alors sur `http://<ip-du-nas>:8000`, depuis le réseau local ou le WireGuard.
+
+### Accès par un nom de domaine (Web Station)
+
+Pour servir l'app sur `https://savapav.my-domain.com` :
+
+1. Ajouter le projet aux portails web, dans **Container Manager → Project → savapav** :
+   1. arrêter le projet (**Stop**) ;
+   2. dans **Settings**, cocher **Set up web portal via Web Station**, puis choisir `app`, `8000` et `http`, et
+      cliquer sur **Save** ;
+   3. choisir une option de configuration du portail web : le plus simple est le type **Name-based**, avec le
+      hostname `savapav.my-domain.com` ;
+   4. redémarrer le projet (**Start**).
+2. Créer le certificat TLS, dans **Control Panel → Security → Certificate** : **Add** → **Add a new certificate**
+   → **Get a certificate from Let's Encrypt** → **Domain name** : `savapav.my-domain.com`, renseigner l'email, puis
+   **Done**. Pas besoin de **Subject Alternative Name**. La création du certificat prend environ une minute.
+3. Une fois l'app servie en HTTPS, passer `COACH_COOKIE_SECURE=true` dans `/volume1/docker/savapav/.env` (voir
+   [.env.example](.env.example)), puis redémarrer le projet.
 
 Synchro Garmin nocturne de tous les comptes connectés : tâche planifiée DSM (Panneau de configuration →
 Planificateur de tâches, en root) :

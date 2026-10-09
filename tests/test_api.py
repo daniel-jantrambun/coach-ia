@@ -109,6 +109,24 @@ def test_nested_zip_from_garmin_export(tmp_path):
     assert [payload for _, payload in iter_fit_payloads(tmp_path)] == [b"fit-data"]
 
 
+def test_file_import_runs_in_background(settings, conn):
+    alice = client_for(settings, "alice")
+    assert alice.get("/api/activities/import").json() == {"running": False}
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, "w") as z:
+        z.writestr("1_ACTIVITY.fit", b"pas un vrai FIT")
+        z.writestr("2_ACTIVITY.fit", b"pas un vrai FIT")
+    response = alice.post("/api/activities/import", files={"file": ("export.zip", archive.getvalue())})
+    assert response.status_code == 202 and response.json()["running"]
+    # Le TestClient exécute la tâche de fond avant de rendre la main : l'import est terminé.
+    status = alice.get("/api/activities/import").json()
+    assert status["running"] is False and status["error"] is None
+    assert (status["files"], status["imported"], status["skipped"]) == (2, 0, 2)
+    assert client_for(settings, "bob").get("/api/activities/import").json() == {"running": False}
+    bad = alice.post("/api/activities/import", files={"file": ("notes.txt", b"x")})
+    assert bad.status_code == 422
+
+
 def test_serves_web_app_with_spa_fallback(settings, conn, tmp_path):
     web = tmp_path / "web"
     (web / "assets").mkdir(parents=True)
@@ -311,6 +329,9 @@ def test_activity_detail_and_stats_are_per_user(settings, conn):
     assert bob.get("/api/activities/fit:abc").status_code == 404
     assert [a["id"] for a in alice.get("/api/activities?category=bike").json()] == ["fit:abc"]
     assert alice.get("/api/activities?category=run").json() == []
+    assert [a["id"] for a in alice.get("/api/activities?limit=1&offset=0").json()] == ["fit:abc"]
+    assert alice.get("/api/activities?limit=1&offset=1").json() == []
+    assert alice.get("/api/activities?offset=-1").status_code == 422
     assert alice.get("/api/stats?weeks=104").json()["categories"]["bike"]["total"]["km"] == 30.0
     assert bob.get("/api/stats").json()["categories"] == {}
     assert alice.get("/api/stats?weeks=1").status_code == 422
