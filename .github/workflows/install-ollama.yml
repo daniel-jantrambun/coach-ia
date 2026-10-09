@@ -31,22 +31,22 @@ jobs:
             - uses: actions/checkout@v4
 
             # La version d'Ollama vient du compose.yaml : une seule source de vérité.
-            - name: Download Ollama image and model
-              timeout-minutes: 20
-              run: |
-                  OLLAMA_IMAGE=$(grep -o 'ollama/ollama:[^ "]*' compose.yaml)
-                  echo "OLLAMA_IMAGE=$OLLAMA_IMAGE" >> "$GITHUB_ENV"
-                  docker pull --platform "$NAS_PLATFORM" "$OLLAMA_IMAGE"
-                  docker save --platform "$NAS_PLATFORM" "$OLLAMA_IMAGE" | gzip > ollama-image.tar.gz
+            # - name: Download Ollama image and model
+            #   timeout-minutes: 20
+            #   run: |
+            #       OLLAMA_IMAGE=$(grep -o 'ollama/ollama:[^ "]*' compose.yaml)
+            #       echo "OLLAMA_IMAGE=$OLLAMA_IMAGE" >> "$GITHUB_ENV"
+            #       docker pull --platform "$NAS_PLATFORM" "$OLLAMA_IMAGE"
+            #       docker save --platform "$NAS_PLATFORM" "$OLLAMA_IMAGE" | gzip > ollama-image.tar.gz
 
-                  mkdir ollama-data
-                  docker run -d --name ollama -v "$PWD/ollama-data:/root/.ollama" "$OLLAMA_IMAGE"
-                  sleep 5
-                  docker exec ollama ollama pull "${{ inputs.model }}"
-                  docker rm -f ollama
-                  # Les poids GGUF sont déjà compressés : un tar simple suffit.
-                  sudo tar -C ollama-data -cf ollama-models.tar models
-                  ls -lh ollama-image.tar.gz ollama-models.tar
+            #       mkdir ollama-data
+            #       docker run -d --name ollama -v "$PWD/ollama-data:/root/.ollama" "$OLLAMA_IMAGE"
+            #       sleep 5
+            #       docker exec ollama ollama pull "${{ inputs.model }}"
+            #       docker rm -f ollama
+            #       # Les poids GGUF sont déjà compressés : un tar simple suffit.
+            #       sudo tar -C ollama-data -cf ollama-models.tar models
+            #       ls -lh ollama-image.tar.gz ollama-models.tar
 
             - name: Connect WireGuard
               timeout-minutes: 3
