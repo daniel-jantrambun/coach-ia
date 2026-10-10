@@ -127,8 +127,9 @@ jobs:
           sudo wg-quick up wg0
 
       # Crée le .env du NAS à partir de .env.example s'il n'existe pas, puis y écrit le secret COACH_SECRET_KEY
-      # (à chaque déploiement : le secret GitHub fait foi). Les autres variables du .env ne sont pas touchées.
-      # stdin = mot de passe sudo, secret, puis .env.example : sudo -S lit le mot de passe octet par octet
+      # (à chaque déploiement : le secret GitHub fait foi) et SAVAPAV_PORT si la variable GitHub est définie.
+      # Les autres variables du .env ne sont pas touchées.
+      # stdin = mot de passe sudo, secret, port, puis .env.example : sudo -S lit le mot de passe octet par octet
       # jusqu'au saut de ligne, la suite parvient au script. Le secret n'apparaît dans aucune ligne de commande.
       - name: Write env file on NAS
         timeout-minutes: 3
@@ -136,20 +137,30 @@ jobs:
           SSHPASS: ${{ secrets.SYNOLOGY_USER_PWD }}
           TARGET: ${{ vars.SYNOLOGY_USER_LOGIN }}@${{ vars.SYNOLOGY_PRIVATE_IP }}
           COACH_SECRET_KEY: ${{ secrets.COACH_SECRET_KEY }}
+          SAVAPAV_PORT: ${{ vars.SAVAPAV_PORT }}
         run: |
           nas() { sshpass -e ssh -p 22822 -o StrictHostKeyChecking=no "$TARGET" "$@"; }
           [ -n "$COACH_SECRET_KEY" ] || { echo "Secret COACH_SECRET_KEY non configuré dans le dépôt" >&2; exit 1; }
-          { printf '%s\n%s\n' "$SSHPASS" "$COACH_SECRET_KEY"; cat .env.example; } | nas "sudo -S -p '' sh -euc '
+          case "$SAVAPAV_PORT" in
+            "" | [1-9] | [1-9][0-9] | [1-9][0-9][0-9] | [1-9][0-9][0-9][0-9] | [1-9][0-9][0-9][0-9][0-9]) ;;
+            *) echo "Variable SAVAPAV_PORT invalide : $SAVAPAV_PORT" >&2; exit 1 ;;
+          esac
+          { printf '%s\n%s\n%s\n' "$SSHPASS" "$COACH_SECRET_KEY" "$SAVAPAV_PORT"; cat .env.example; } | nas "sudo -S -p '' sh -euc '
             umask 077
             IFS= read -r key
+            IFS= read -r port
             mkdir -p $NAS_DIR/data
             if [ ! -f $NAS_DIR/.env ]; then
               cat > $NAS_DIR/.env
               echo \"$NAS_DIR/.env créé à partir de .env.example\"
             fi
-            { grep -v \"^COACH_SECRET_KEY=\" $NAS_DIR/.env || true; printf \"COACH_SECRET_KEY=%s\n\" \"\$key\"; } > $NAS_DIR/.env.tmp
-            cat $NAS_DIR/.env.tmp > $NAS_DIR/.env
-            rm $NAS_DIR/.env.tmp
+            set_var() {
+              { grep -v \"^\$1=\" $NAS_DIR/.env || true; printf \"%s=%s\n\" \"\$1\" \"\$2\"; } > $NAS_DIR/.env.tmp
+              cat $NAS_DIR/.env.tmp > $NAS_DIR/.env
+              rm $NAS_DIR/.env.tmp
+            }
+            set_var COACH_SECRET_KEY \"\$key\"
+            if [ -n \"\$port\" ]; then set_var SAVAPAV_PORT \"\$port\"; fi
             chmod 600 $NAS_DIR/.env'"
 
       # Transfère l'image et le compose.yaml du dépôt, puis docker load + compose up -d.
@@ -228,8 +239,12 @@ jobs:
           TARGET: ${{ vars.SYNOLOGY_USER_LOGIN }}@${{ vars.SYNOLOGY_PRIVATE_IP }}
         run: |
           nas() { sshpass -e ssh -p 22822 -o StrictHostKeyChecking=no "$TARGET" "$@"; }
+          # Port publié sur le NAS (SAVAPAV_PORT du .env, illisible sans root) : « 0.0.0.0:8000 » -> 8000.
+          PORT=$(echo "$SSHPASS" | nas "sudo -S -p '' /usr/local/bin/docker port savapav-web 8000" | head -n 1)
+          PORT=${PORT##*:}
+          echo "App publiée sur le port $PORT du NAS"
           for _ in $(seq 1 10); do
-            nas "curl -fsS http://localhost:8000/api/health" && exit 0
+            nas "curl -fsS http://localhost:$PORT/api/health" && exit 0
             sleep 3
           done
           echo "L'app ne répond pas sur le NAS après le déploiement" >&2

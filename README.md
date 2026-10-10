@@ -16,7 +16,8 @@ Garmin (export FIT / Garmin Connect) ─▶ SQLite ─▶ charge d'entraînement
 Pas de chat : l'outil génère un plan, le LLM ne fait que le rédiger. Coût : ~0 €/an (électricité).
 
 Multi-utilisateurs (famille), accessible uniquement via le réseau local ou le WireGuard du NAS : l'app n'est pas
-exposée sur Internet.
+exposée sur Internet (le nom de domaine optionnel, voir [Web Station](#portail-web-station),
+pointe lui aussi vers le NAS en local ou dans le WireGuard).
 
 Origine : conversation Le Chat « Utilisation de données sportives pour modèles d'AI » (oct. 2026),
 résumée et revue dans [docs/architecture.md](docs/architecture.md).
@@ -43,9 +44,11 @@ téléphone, en clair/sombre selon le réglage de l'appareil :
   force). Elle en tire un bloc de 4 semaines (3 de charge + 1 de décharge) ; le bloc suivant est recalculé à partir
   de ce que vous avez réellement fait. Le plan « course à une date » (distance, chrono) reste disponible.
   Semaines dépliables (semaine en cours mise en avant), rédaction par le LLM.
-- **Activités** : fraîcheur du jour, courbes forme/fatigue, import de fichiers, synchro Garmin (les 50 dernières
-  activités, ou « Tout synchroniser » : tout l'historique, en tâche de fond avec progression, après confirmation).
-- **Graphes** : par type d'activité (course, vélo, natation, salle, autre) sur 12 semaines, 6 mois ou 1 an :
+- **Activités** : fraîcheur du jour, courbes forme/fatigue, import de fichiers (en tâche de fond avec progression :
+  un export complet prend plusieurs minutes), synchro Garmin (les 50 dernières activités, ou « Tout synchroniser » :
+  tout l'historique, en tâche de fond avec progression, après confirmation). Liste des dernières activités, 50 par
+  50 (« Afficher plus d'activités »).
+- **Graphes** : par type d'activité (course, vélo, natation, salle, autre) sur 12 semaines, 6 mois, 1, 2, 3 ou 5 ans :
   volume, allure ou vitesse et FC moyenne par semaine, puis la liste des activités de ce type. Un clic sur une
   activité ouvre son récap : allure/vitesse, FC, altitude, puissance et cadence (survol synchronisé), temps par km
   (ou par 5 km à vélo), longueurs de bassin en natation (allure /100 m, comparable en 25 et 50 m ; tranches de 100 m),
@@ -74,7 +77,8 @@ L'API est sous `/api` (docs : `/api/docs`).
   (API non officielle) : compter 20 à 40 min pour 1 000 activités. Si Garmin limite les requêtes (429), ce qui a été
   téléchargé est importé et la synchro reprend où elle s'est arrêtée au prochain lancement. Chaque synchro n'importe
   que les fichiers nouveaux. Pour un premier import massif, l'export complet Garmin (ci-dessous) reste le plus sûr.
-- **Sans Garmin** : import d'un `.fit` ou de l'export complet Garmin (`.zip`) via `POST /activities/import`.
+- **Sans Garmin** : import d'un `.fit` ou de l'export complet Garmin (`.zip`) via `POST /activities/import`, en
+  tâche de fond (réponse immédiate, sans 504 du reverse proxy) ; avancement par `GET /activities/import`.
 - Les données de chacun (activités, plans, FC repos/max) sont isolées par utilisateur.
 
 ## Développement local
@@ -132,6 +136,7 @@ Secrets et variables du dépôt (Settings → Secrets and variables → Actions)
 | `COACH_SECRET_KEY` | secret | phrase secrète écrite dans le `.env` du NAS à chaque déploiement (voir [.env.example](.env.example)) |
 | `SYNOLOGY_USER_LOGIN` | variable | utilisateur SSH du NAS |
 | `SYNOLOGY_PRIVATE_IP` | variable | IP du NAS dans le WireGuard |
+| `SAVAPAV_PORT` | variable (optionnelle) | port de l'app sur le NAS, écrit dans le `.env` (8000 par défaut) |
 
 ### Première installation
 
@@ -144,22 +149,30 @@ Secrets et variables du dépôt (Settings → Secrets and variables → Actions)
    qu'il passe à l'état **En cours d'exécution**. À ne faire qu'une fois.
 4. Ouvrir l'app et créer le compte administrateur, puis les comptes de la famille (page **Comptes**).
 
-L'app est alors sur `http://<ip-du-nas>:8000`, depuis le réseau local ou le WireGuard.
+L'app est alors sur `http://<ip-du-nas>:8000` (ou le port `SAVAPAV_PORT`), depuis le réseau local ou le WireGuard.
 
-### Accès par un nom de domaine (Web Station)
+### Portail Web Station
 
-Pour servir l'app sur `https://savapav.my-domain.com` :
+Optionnel : Web Station peut relayer l'app, toujours depuis le réseau local ou le WireGuard. Deux modes :
+
+- **Par port** (*Port-based*) : Web Station écoute sur un autre port du NAS, `8001` par exemple (pas le port de
+  l'app, déjà pris), et relaie vers elle : `http://<ip-du-nas>:8001`. Pas de certificat TLS dans ce mode.
+- **Par nom** (*Name-based*) : Web Station répond sur les ports 80/443 pour un hostname, par exemple
+  `savapav.my-domain.com`, avec un certificat Let's Encrypt : `https://savapav.my-domain.com`. Le nom doit pointer
+  vers l'IP du NAS (enregistrement DNS ou DNS du routeur).
 
 1. Ajouter le projet aux portails web, dans **Container Manager → Project → savapav** :
    1. arrêter le projet (**Stop**) ;
    2. dans **Settings**, cocher **Set up web portal via Web Station**, puis choisir `app`, `8000` et `http`, et
       cliquer sur **Save** ;
-   3. choisir une option de configuration du portail web : le plus simple est le type **Name-based**, avec le
-      hostname `savapav.my-domain.com` ;
+   3. choisir le type de portail : **Port-based** avec le port `8001`, ou **Name-based** avec le hostname
+      `savapav.my-domain.com` ;
    4. redémarrer le projet (**Start**).
-2. Créer le certificat TLS, dans **Control Panel → Security → Certificate** : **Add** → **Add a new certificate**
-   → **Get a certificate from Let's Encrypt** → **Domain name** : `savapav.my-domain.com`, renseigner l'email, puis
-   **Done**. Pas besoin de **Subject Alternative Name**. La création du certificat prend environ une minute.
+2. Par nom uniquement, créer le certificat TLS dans **Control Panel → Security → Certificate** : **Add** → **Add a
+   new certificate** → **Get a certificate from Let's Encrypt** → **Domain name** : `savapav.my-domain.com`,
+   renseigner l'email, puis **Done**. Pas besoin de **Subject Alternative Name**. La création prend environ une
+   minute. Let's Encrypt valide le domaine par le port 80 depuis Internet, à la création puis à chaque
+   renouvellement (~90 jours).
 3. Une fois l'app servie en HTTPS, passer `COACH_COOKIE_SECURE=true` dans `/volume1/docker/savapav/.env` (voir
    [.env.example](.env.example)), puis redémarrer le projet.
 

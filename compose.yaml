@@ -12,8 +12,10 @@ services:
       COACH_LLM_BASE_URL: http://llm:11434
     volumes:
       - ./data:/data
+    # Port du NAS configurable (SAVAPAV_PORT dans le .env), 8000 par défaut. Un portail Web Station par port
+    # écoute sur un autre port (8001 par exemple) et relaie vers celui-ci.
     ports:
-      - "8000:8000"
+      - "${SAVAPAV_PORT:-8000}:8000"
     depends_on:
       - llm
 
