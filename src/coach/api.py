@@ -7,7 +7,7 @@ from fastapi import APIRouter, BackgroundTasks, Cookie, Depends, FastAPI, HTTPEx
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-from coach import auth, service
+from coach import api, auth, service
 from coach.config import Settings, load_settings
 from coach.db import connect
 from coach.ingest import garmin
@@ -273,6 +273,10 @@ def create_app(settings: Settings) -> FastAPI:
                         offset: int = Query(default=0, ge=0)):
         return service.activities_with_category(conn, user["id"], category, limit, offset)
 
+    @api.get("/activities/category")
+    def list_activities_by_category(user: User, conn: Conn, limit: int = 50, category: str | None = None, weeks: int = 26):
+        return service.activities_with_category_and_weeks(conn, user["id"], category, weeks, limit)
+
     # Avant /activities/{activity_id}, qui capterait sinon « import ».
     @api.get("/activities/import")
     def import_file_status(user: User):
@@ -315,7 +319,7 @@ def create_app(settings: Settings) -> FastAPI:
         return detail
 
     @api.get("/stats")
-    def stats(user: User, conn: Conn, weeks: int = Query(default=26, ge=4, le=104)):
+    def stats(user: User, conn: Conn, weeks: int = Query(default=26, ge=4)):
         return service.stats(conn, user, date.today(), weeks)
 
     @api.get("/load")

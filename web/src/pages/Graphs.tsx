@@ -18,6 +18,9 @@ const PERIODS = [
   { weeks: 12, label: "12 sem." },
   { weeks: 26, label: "6 mois" },
   { weeks: 52, label: "1 an" },
+  { weeks: 104, label: "2 ans" },
+  { weeks: 156, label: "3 ans" },
+  { weeks: 260, label: "5 ans" },
 ];
 const PACE_STEPS = [5, 10, 15, 20, 30, 60, 120, 300];
 
@@ -58,10 +61,10 @@ export function GraphsPage() {
     if (!cat) return;
     setList(null);
     api
-      .activities(100, cat)
+      .activitiesCat(5000, cat, weeks)
       .then(setList)
       .catch((e) => setError(errorMessage(e)));
-  }, [cat]);
+  }, [cat, weeks]);
 
   function select(next: { type?: Category; periode?: number }) {
     const p = new URLSearchParams(params);
@@ -76,8 +79,23 @@ export function GraphsPage() {
   const data = cat ? stats.categories[cat] : undefined;
   const hasDistance = !!data && data.total.km > 0 && cat !== "gym";
   const isSpeed = cat === "bike";
-  const weekLabels = data?.weeks.map((w) => dayLabel(w.start, { day: "numeric", month: "short" })) ?? [];
+  const multiYear = weeks > 52;
+  // Infobulles : date complète (avec l'année au-delà d'un an).
+  const weekLabels =
+    data?.weeks.map((w) =>
+      dayLabel(w.start, {
+        day: "numeric",
+        month: multiYear ? "numeric" : "short",
+        year: multiYear ? "numeric" : undefined,
+      }),
+    ) ?? [];
+  // Axe des abscisses : étiquettes courtes (~48 px chacune), « janv. 26 » au-delà d'un an.
+  const axisLabels =
+    data?.weeks.map((w) =>
+      dayLabel(w.start, multiYear ? { month: "short", year: "2-digit" } : { day: "numeric", month: "short" }),
+    ) ?? [];
 
+  console.log("GraphsPage", { weeks, cat, data, hasDistance, isSpeed, weekLabels, list });
   return (
     <>
       <div className="space-y-2">
@@ -142,13 +160,13 @@ export function GraphsPage() {
               <BarChart
                 label={hasDistance ? "Distance par semaine (km)" : "Durée par semaine"}
                 values={data.weeks.map((w) => (hasDistance ? w.km : w.minutes))}
-                labels={weekLabels}
+                labels={axisLabels}
                 formatY={(v) => (hasDistance ? String(v) : minutes(v))}
                 tooltip={(i) => {
                   const w = data.weeks[i];
                   return (
                     <>
-                      <p className="text-ink-3">Semaine du {weekLabels[i]}</p>
+                      <p className="text-ink-3 text-nowrap">Semaine du {weekLabels[i]}</p>
                       <p className="font-medium tabular-nums">
                         {w.sessions} séance{w.sessions > 1 ? "s" : ""} · {minutes(w.minutes)}
                       </p>
@@ -171,7 +189,7 @@ export function GraphsPage() {
                         : (cat === "swim" ? 100 : 1000) / w.speed_m_s
                       : null,
                   )}
-                  labels={weekLabels}
+                  labels={axisLabels}
                   invert={!isSpeed}
                   ySteps={isSpeed ? undefined : PACE_STEPS}
                   formatY={(v) =>
@@ -199,7 +217,7 @@ export function GraphsPage() {
                 <DotChart
                   label="FC moyenne par semaine (bpm)"
                   values={data.weeks.map((w) => w.avg_hr)}
-                  labels={weekLabels}
+                  labels={axisLabels}
                   formatY={(v) => String(Math.round(v))}
                   tooltip={(i) => {
                     const w = data.weeks[i];

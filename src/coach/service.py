@@ -10,16 +10,28 @@ from coach.llm import narrate_week
 from coach.load import daily_loads, fitness_series, recent_weekly_km
 from coach.multisport import Preferences, build_block, validate_block
 from coach.planner import Goal, build_plan, validate_plan
-from coach.sports import analyze, category, category_stats
+from coach.sports import analyze, category, category_stats, stats_start
+
+import logging
+
+logging.basicConfig(level=logging.INFO)
 
 
 class InvalidPlan(Exception):
     pass
 
 
-def activities(conn, user_id: int, limit: int | None = None) -> list[dict]:
-    sql = "SELECT * FROM activities WHERE user_id = ? ORDER BY start_time DESC"
+def activities(conn, user_id: int, limit: int | None = None, since: date | None = None, category: str | None = None) -> list[dict]:
+    sql = "SELECT * FROM activities WHERE user_id = ?"
     params: tuple = (user_id,)
+    if since is not None:
+        # start_time est stocké en ISO UTC : la comparaison de chaînes avec « AAAA-MM-JJ » suffit.
+        sql += " AND start_time >= ?"
+        params += (since.isoformat(),)
+    if category is not None:
+        sql += " AND category = ?"
+        params += (category,)
+    sql += " ORDER BY start_time DESC"
     if limit:
         sql += " LIMIT ?"
         params += (limit,)
@@ -34,6 +46,17 @@ def activities_with_category(conn, user_id: int, cat: str | None = None, limit: 
     rows = rows[offset:]
     return rows[:limit] if limit else rows
 
+def activities_with_category_and_weeks(conn, user_id: int, cat: str,
+                             weeks: int , limit: int | None = None ) -> list[dict]:
+    ## Récupère les activités d'un utilisateur sur un nombre de semaines donné.
+    rows = [{**a, "category": category(a["sport"], a.get("sub_sport"))} for a in activities(conn, user_id, limit=limit, since=stats_start(date.today(), weeks) if weeks is not None else None)]
+    logging.info(f"activities_with_category_and_weeks: user_id={user_id}, cat={cat}, weeks={weeks}, limit={limit}, rows={len(rows)}")
+    # Filtre par catégorie 
+    rows = [a for a in rows if a["category"] == cat]
+    logging.info(f"activities_with_category_and_weeks: after cat filter - limit={limit}, rows={len(rows)}")
+        
+    return rows
+
 
 def activity_detail(conn, user: dict, activity_id: str) -> dict | None:
     row = conn.execute("SELECT * FROM activities WHERE user_id = ? AND id = ?", (user["id"], activity_id)).fetchone()
@@ -46,7 +69,8 @@ def activity_detail(conn, user: dict, activity_id: str) -> dict | None:
 
 
 def stats(conn, user: dict, today: date, weeks: int) -> dict:
-    return {"weeks": weeks, "categories": category_stats(activities(conn, user["id"]), today, weeks)}
+    recent = activities(conn, user["id"], since=stats_start(today, weeks))
+    return {"weeks": weeks, "categories": category_stats(recent, today, weeks)}
 
 
 def load_series(conn, user: dict, until: date) -> list:

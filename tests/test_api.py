@@ -333,5 +333,12 @@ def test_activity_detail_and_stats_are_per_user(settings, conn):
     assert alice.get("/api/activities?limit=1&offset=1").json() == []
     assert alice.get("/api/activities?offset=-1").status_code == 422
     assert alice.get("/api/stats?weeks=104").json()["categories"]["bike"]["total"]["km"] == 30.0
+    from datetime import date
+
+    from coach import service
+    assert [a["id"] for a in service.activities(conn, alice_id, since=date(2026, 10, 1))] == ["fit:abc"]
+    assert service.activities(conn, alice_id, since=date(2026, 10, 2)) == []
+    stats = service.stats(conn, {"id": alice_id}, date(2026, 10, 7), weeks=1)  # semaine du lundi 5 octobre
+    assert stats["categories"] == {}
     assert bob.get("/api/stats").json()["categories"] == {}
     assert alice.get("/api/stats?weeks=1").status_code == 422

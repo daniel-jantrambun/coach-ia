@@ -160,10 +160,15 @@ def analyze(activities, today: date, hr_rest: int, hr_max: int, weeks: int = ANA
     }
 
 
+def stats_start(today: date, weeks: int) -> date:
+    """Lundi de la première des `weeks` semaines calendaires couvertes par les statistiques."""
+    return today - timedelta(days=today.weekday(), weeks=weeks - 1)
+
+
 def category_stats(activities, today: date, weeks: int) -> dict[str, dict]:
     """Par type d'activité, semaines calendaires (lundi) des `weeks` dernières semaines, semaine en cours comprise :
     séances, minutes, km, allure/vitesse moyenne (temps total / distance totale), FC moyenne pondérée par la durée."""
-    first_monday = today - timedelta(days=today.weekday(), weeks=weeks - 1)
+    first_monday = stats_start(today, weeks)
     acc: dict[str, list[dict]] = {}
     for a in activities:
         day = _day(a)

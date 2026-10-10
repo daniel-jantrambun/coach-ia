@@ -292,6 +292,11 @@ export const api = {
       "GET",
       `/activities?limit=${limit}&offset=${offset}${category ? `&category=${category}` : ""}`,
     ),
+  activitiesCat: (limit = 50, category: Category, weeks: number) =>
+    request<Activity[]>(
+      "GET",
+      `/activities/category?limit=${limit}&weeks=${weeks}&category=${category}`,
+    ),
   activity: (id: string) => request<ActivityDetail>("GET", `/activities/${encodeURIComponent(id)}`),
   stats: (weeks: number) => request<Stats>("GET", `/stats?weeks=${weeks}`),
   importFile: (file: File) => {
